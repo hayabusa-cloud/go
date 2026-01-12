@@ -1072,6 +1072,7 @@ const (
 	OpAMD64LoweredNilCheck
 	OpAMD64LoweredWB
 	OpAMD64LoweredHasCPUFeature
+	OpAMD64MFENCE
 	OpAMD64LoweredPanicBoundsRR
 	OpAMD64LoweredPanicBoundsRC
 	OpAMD64LoweredPanicBoundsCR
@@ -1093,16 +1094,22 @@ const (
 	OpAMD64AddTupleFirst64
 	OpAMD64CMPXCHGLlock
 	OpAMD64CMPXCHGQlock
+	OpAMD64CMPXCHGLlockValue
+	OpAMD64CMPXCHGQlockValue
 	OpAMD64ANDBlock
 	OpAMD64ANDLlock
 	OpAMD64ANDQlock
 	OpAMD64ORBlock
 	OpAMD64ORLlock
 	OpAMD64ORQlock
+	OpAMD64XORLlock
+	OpAMD64XORQlock
 	OpAMD64LoweredAtomicAnd64
 	OpAMD64LoweredAtomicAnd32
 	OpAMD64LoweredAtomicOr64
 	OpAMD64LoweredAtomicOr32
+	OpAMD64LoweredAtomicXor64
+	OpAMD64LoweredAtomicXor32
 	OpAMD64PrefetchT0
 	OpAMD64PrefetchNTA
 	OpAMD64ANDNQ
@@ -4472,18 +4479,34 @@ const (
 	OpARM64LoweredAtomicCas32
 	OpARM64LoweredAtomicCas64Variant
 	OpARM64LoweredAtomicCas32Variant
+	OpARM64LoweredAtomicCax64
+	OpARM64LoweredAtomicCax32
+	OpARM64LoweredAtomicCax64Variant
+	OpARM64LoweredAtomicCax32Variant
 	OpARM64LoweredAtomicAnd8
 	OpARM64LoweredAtomicOr8
 	OpARM64LoweredAtomicAnd64
 	OpARM64LoweredAtomicOr64
 	OpARM64LoweredAtomicAnd32
 	OpARM64LoweredAtomicOr32
+	OpARM64LoweredAtomicXor8
+	OpARM64LoweredAtomicXor64
+	OpARM64LoweredAtomicXor32
 	OpARM64LoweredAtomicAnd8Variant
 	OpARM64LoweredAtomicOr8Variant
 	OpARM64LoweredAtomicAnd64Variant
 	OpARM64LoweredAtomicOr64Variant
 	OpARM64LoweredAtomicAnd32Variant
 	OpARM64LoweredAtomicOr32Variant
+	OpARM64LoweredAtomicXor8Variant
+	OpARM64LoweredAtomicXor64Variant
+	OpARM64LoweredAtomicXor32Variant
+	OpARM64LoweredAtomicLoad8Relaxed
+	OpARM64LoweredAtomicLoad32Relaxed
+	OpARM64LoweredAtomicLoad64Relaxed
+	OpARM64LoweredAtomicStore8Relaxed
+	OpARM64LoweredAtomicStore32Relaxed
+	OpARM64LoweredAtomicStore64Relaxed
 	OpARM64LoweredWB
 	OpARM64LoweredPanicBoundsRR
 	OpARM64LoweredPanicBoundsRC
@@ -6106,6 +6129,8 @@ const (
 	OpAtomicCompareAndSwap32
 	OpAtomicCompareAndSwap64
 	OpAtomicCompareAndSwapRel32
+	OpAtomicCompareAndExchange32
+	OpAtomicCompareAndExchange64
 	OpAtomicAnd8
 	OpAtomicOr8
 	OpAtomicAnd32
@@ -6116,6 +6141,8 @@ const (
 	OpAtomicOr64value
 	OpAtomicOr32value
 	OpAtomicOr8value
+	OpAtomicXor64value
+	OpAtomicXor32value
 	OpAtomicStore8Variant
 	OpAtomicStore32Variant
 	OpAtomicStore64Variant
@@ -6126,12 +6153,24 @@ const (
 	OpAtomicExchange64Variant
 	OpAtomicCompareAndSwap32Variant
 	OpAtomicCompareAndSwap64Variant
+	OpAtomicCompareAndExchange32Variant
+	OpAtomicCompareAndExchange64Variant
 	OpAtomicAnd64valueVariant
 	OpAtomicOr64valueVariant
 	OpAtomicAnd32valueVariant
 	OpAtomicOr32valueVariant
 	OpAtomicAnd8valueVariant
 	OpAtomicOr8valueVariant
+	OpAtomicXor64valueVariant
+	OpAtomicXor32valueVariant
+	OpAtomicLoad8Relaxed
+	OpAtomicLoad32Relaxed
+	OpAtomicLoad64Relaxed
+	OpAtomicLoadPtrRelaxed
+	OpAtomicStore8Relaxed
+	OpAtomicStore32Relaxed
+	OpAtomicStore64Relaxed
+	OpAtomicStorePtrRelaxedNoWB
 	OpPubBarrier
 	OpClobber
 	OpClobberReg
@@ -18215,6 +18254,13 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:           "MFENCE",
+		argLen:         1,
+		hasSideEffects: true,
+		asm:            x86.AMFENCE,
+		reg:            regInfo{},
+	},
+	{
 		name:    "LoweredPanicBoundsRR",
 		auxType: auxInt64,
 		argLen:  3,
@@ -18480,6 +18526,48 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:           "CMPXCHGLlockValue",
+		auxType:        auxSymOff,
+		argLen:         4,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
+		hasSideEffects: true,
+		symEffect:      SymRdWr,
+		asm:            x86.ACMPXCHGL,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 1},     // AX
+				{0, 49135}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+				{2, 49135}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 1}, // AX
+			},
+		},
+	},
+	{
+		name:           "CMPXCHGQlockValue",
+		auxType:        auxSymOff,
+		argLen:         4,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
+		hasSideEffects: true,
+		symEffect:      SymRdWr,
+		asm:            x86.ACMPXCHGQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 1},     // AX
+				{0, 49135}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+				{2, 49135}, // AX CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 1}, // AX
+			},
+		},
+	},
+	{
 		name:           "ANDBlock",
 		auxType:        auxSymOff,
 		argLen:         3,
@@ -18576,6 +18664,38 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:           "XORLlock",
+		auxType:        auxSymOff,
+		argLen:         3,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
+		hasSideEffects: true,
+		symEffect:      SymRdWr,
+		asm:            x86.AXORL,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 49151},             // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15
+				{0, 72057594037993471}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 g R15 SB
+			},
+		},
+	},
+	{
+		name:           "XORQlock",
+		auxType:        auxSymOff,
+		argLen:         3,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
+		hasSideEffects: true,
+		symEffect:      SymRdWr,
+		asm:            x86.AXORQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 49151},             // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15
+				{0, 72057594037993471}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 g R15 SB
+			},
+		},
+	},
+	{
 		name:            "LoweredAtomicAnd64",
 		auxType:         auxSymOff,
 		argLen:          3,
@@ -18656,6 +18776,52 @@ var opcodeTable = [...]opInfo{
 		unsafePoint:     true,
 		symEffect:       SymRdWr,
 		asm:             x86.AORL,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 49134}, // CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+				{1, 49134}, // CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 1}, // AX
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicXor64",
+		auxType:         auxSymOff,
+		argLen:          3,
+		resultNotInArgs: true,
+		clobberFlags:    true,
+		needIntTemp:     true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		symEffect:       SymRdWr,
+		asm:             x86.AXORQ,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 49134}, // CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+				{1, 49134}, // CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
+			},
+			outputs: []outputInfo{
+				{1, 0},
+				{0, 1}, // AX
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicXor32",
+		auxType:         auxSymOff,
+		argLen:          3,
+		resultNotInArgs: true,
+		clobberFlags:    true,
+		needIntTemp:     true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		symEffect:       SymRdWr,
+		asm:             x86.AXORL,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 49134}, // CX DX BX BP SI DI R8 R9 R10 R11 R12 R13 R15
@@ -69543,6 +69709,82 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:            "LoweredAtomicCax64",
+		argLen:          4,
+		resultNotInArgs: true,
+		clobberFlags:    true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{2, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicCax32",
+		argLen:          4,
+		resultNotInArgs: true,
+		clobberFlags:    true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{2, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicCax64Variant",
+		argLen:          4,
+		resultNotInArgs: true,
+		clobberFlags:    true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{2, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicCax32Variant",
+		argLen:          4,
+		resultNotInArgs: true,
+		clobberFlags:    true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{2, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
 		name:            "LoweredAtomicAnd8",
 		argLen:          3,
 		resultNotInArgs: true,
@@ -69657,6 +69899,63 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:            "LoweredAtomicXor8",
+		argLen:          3,
+		resultNotInArgs: true,
+		needIntTemp:     true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		asm:             arm64.AEOR,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicXor64",
+		argLen:          3,
+		resultNotInArgs: true,
+		needIntTemp:     true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		asm:             arm64.AEOR,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicXor32",
+		argLen:          3,
+		resultNotInArgs: true,
+		needIntTemp:     true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		unsafePoint:     true,
+		asm:             arm64.AEOR,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
 		name:            "LoweredAtomicAnd8Variant",
 		argLen:          3,
 		resultNotInArgs: true,
@@ -69752,6 +70051,135 @@ var opcodeTable = [...]opInfo{
 			},
 			outputs: []outputInfo{
 				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicXor8Variant",
+		argLen:          3,
+		resultNotInArgs: true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicXor64Variant",
+		argLen:          3,
+		resultNotInArgs: true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicXor32Variant",
+		argLen:          3,
+		resultNotInArgs: true,
+		faultOnNilArg0:  true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:           "LoweredAtomicLoad8Relaxed",
+		argLen:         2,
+		faultOnNilArg0: true,
+		asm:            arm64.AMOVBU,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:           "LoweredAtomicLoad32Relaxed",
+		argLen:         2,
+		faultOnNilArg0: true,
+		asm:            arm64.AMOVWU,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:           "LoweredAtomicLoad64Relaxed",
+		argLen:         2,
+		faultOnNilArg0: true,
+		asm:            arm64.AMOVD,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
+			},
+		},
+	},
+	{
+		name:           "LoweredAtomicStore8Relaxed",
+		argLen:         3,
+		faultOnNilArg0: true,
+		hasSideEffects: true,
+		asm:            arm64.AMOVB,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+		},
+	},
+	{
+		name:           "LoweredAtomicStore32Relaxed",
+		argLen:         3,
+		faultOnNilArg0: true,
+		hasSideEffects: true,
+		asm:            arm64.AMOVW,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
+			},
+		},
+	},
+	{
+		name:           "LoweredAtomicStore64Relaxed",
+		argLen:         3,
+		faultOnNilArg0: true,
+		hasSideEffects: true,
+		asm:            arm64.AMOVD,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{1, 939524095},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 ZERO
+				{0, 9223372038331170815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 g R30 SP SB
 			},
 		},
 	},
@@ -88756,6 +89184,18 @@ var opcodeTable = [...]opInfo{
 		generic:        true,
 	},
 	{
+		name:           "AtomicCompareAndExchange32",
+		argLen:         4,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicCompareAndExchange64",
+		argLen:         4,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
 		name:           "AtomicAnd8",
 		argLen:         3,
 		hasSideEffects: true,
@@ -88811,6 +89251,18 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "AtomicOr8value",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicXor64value",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicXor32value",
 		argLen:         3,
 		hasSideEffects: true,
 		generic:        true,
@@ -88876,6 +89328,18 @@ var opcodeTable = [...]opInfo{
 		generic:        true,
 	},
 	{
+		name:           "AtomicCompareAndExchange32Variant",
+		argLen:         4,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicCompareAndExchange64Variant",
+		argLen:         4,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
 		name:           "AtomicAnd64valueVariant",
 		argLen:         3,
 		hasSideEffects: true,
@@ -88907,6 +89371,62 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:           "AtomicOr8valueVariant",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicXor64valueVariant",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicXor32valueVariant",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:    "AtomicLoad8Relaxed",
+		argLen:  2,
+		generic: true,
+	},
+	{
+		name:    "AtomicLoad32Relaxed",
+		argLen:  2,
+		generic: true,
+	},
+	{
+		name:    "AtomicLoad64Relaxed",
+		argLen:  2,
+		generic: true,
+	},
+	{
+		name:    "AtomicLoadPtrRelaxed",
+		argLen:  2,
+		generic: true,
+	},
+	{
+		name:           "AtomicStore8Relaxed",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicStore32Relaxed",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicStore64Relaxed",
+		argLen:         3,
+		hasSideEffects: true,
+		generic:        true,
+	},
+	{
+		name:           "AtomicStorePtrRelaxedNoWB",
 		argLen:         3,
 		hasSideEffects: true,
 		generic:        true,

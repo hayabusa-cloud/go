@@ -2280,3 +2280,32 @@
 (Neq(64|32|16) (SignExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [1])) => (Not x)
 (Eq(64|32|16)  (SignExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [1])) => x
 (Eq(64|32|16)  (SignExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [0])) => (Not x)
+
+// Atomic operation constant folding
+// AtomicAdd with 0 is just a load (Add returns new value = old + 0 = old)
+(AtomicAdd32 ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAdd64 ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicAdd32Variant ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAdd64Variant ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+
+// AtomicOr with 0 is just a load (returns old value, value unchanged)
+(AtomicOr64value ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicOr32value ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicOr8value ptr (Const8 [0]) mem) => (AtomicLoad8 ptr mem)
+(AtomicOr64valueVariant ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicOr32valueVariant ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicOr8valueVariant ptr (Const8 [0]) mem) => (AtomicLoad8 ptr mem)
+
+// AtomicAnd with all-ones is just a load (returns old value, value unchanged)
+(AtomicAnd64value ptr (Const64 [-1]) mem) => (AtomicLoad64 ptr mem)
+(AtomicAnd32value ptr (Const32 [-1]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAnd8value ptr (Const8 [-1]) mem) => (AtomicLoad8 ptr mem)
+(AtomicAnd64valueVariant ptr (Const64 [-1]) mem) => (AtomicLoad64 ptr mem)
+(AtomicAnd32valueVariant ptr (Const32 [-1]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAnd8valueVariant ptr (Const8 [-1]) mem) => (AtomicLoad8 ptr mem)
+
+// AtomicXor with 0 is just a load (returns old value, value unchanged)
+(AtomicXor64value ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicXor32value ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicXor64valueVariant ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicXor32valueVariant ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)

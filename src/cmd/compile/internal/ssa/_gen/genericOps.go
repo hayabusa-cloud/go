@@ -631,6 +631,10 @@ var genericOps = []opData{
 	{name: "AtomicCompareAndSwap64", argLength: 4, typ: "(Bool,Mem)", hasSideEffects: true},    // if *arg0==arg1, then set *arg0=arg2.  Returns true if store happens and new memory.
 	{name: "AtomicCompareAndSwapRel32", argLength: 4, typ: "(Bool,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Lock release, reports whether store happens and new memory.
 
+	// Atomic compare-and-exchange returning old value (for atomix CAX operations).
+	{name: "AtomicCompareAndExchange32", argLength: 4, typ: "(UInt32,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Returns old value of *arg0 and new memory.
+	{name: "AtomicCompareAndExchange64", argLength: 4, typ: "(UInt64,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Returns old value of *arg0 and new memory.
+
 	// Older atomic logical operations which don't return the old value.
 	{name: "AtomicAnd8", argLength: 3, typ: "Mem", hasSideEffects: true},  // *arg0 &= arg1.  arg2=memory.  Returns memory.
 	{name: "AtomicOr8", argLength: 3, typ: "Mem", hasSideEffects: true},   // *arg0 |= arg1.  arg2=memory.  Returns memory.
@@ -644,6 +648,8 @@ var genericOps = []opData{
 	{name: "AtomicOr64value", argLength: 3, typ: "(Uint64, Mem)", hasSideEffects: true},  // *arg0 |= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicOr32value", argLength: 3, typ: "(Uint32, Mem)", hasSideEffects: true},  // *arg0 |= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicOr8value", argLength: 3, typ: "(Uint8, Mem)", hasSideEffects: true},    // *arg0 |= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
+	{name: "AtomicXor64value", argLength: 3, typ: "(Uint64, Mem)", hasSideEffects: true}, // *arg0 ^= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
+	{name: "AtomicXor32value", argLength: 3, typ: "(Uint32, Mem)", hasSideEffects: true}, // *arg0 ^= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 
 	// Atomic operation variants
 	// These variants have the same semantics as above atomic operations.
@@ -659,14 +665,29 @@ var genericOps = []opData{
 	{name: "AtomicExchange8Variant", argLength: 3, typ: "(UInt8,Mem)", hasSideEffects: true},       // Store arg1 to *arg0.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicExchange32Variant", argLength: 3, typ: "(UInt32,Mem)", hasSideEffects: true},     // Store arg1 to *arg0.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicExchange64Variant", argLength: 3, typ: "(UInt64,Mem)", hasSideEffects: true},     // Store arg1 to *arg0.  arg2=memory.  Returns old contents of *arg0 and new memory.
-	{name: "AtomicCompareAndSwap32Variant", argLength: 4, typ: "(Bool,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Returns true if store happens and new memory.
-	{name: "AtomicCompareAndSwap64Variant", argLength: 4, typ: "(Bool,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Returns true if store happens and new memory.
+	{name: "AtomicCompareAndSwap32Variant", argLength: 4, typ: "(Bool,Mem)", hasSideEffects: true},     // if *arg0==arg1, then set *arg0=arg2.  Returns true if store happens and new memory.
+	{name: "AtomicCompareAndSwap64Variant", argLength: 4, typ: "(Bool,Mem)", hasSideEffects: true},     // if *arg0==arg1, then set *arg0=arg2.  Returns true if store happens and new memory.
+	{name: "AtomicCompareAndExchange32Variant", argLength: 4, typ: "(UInt32,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Returns old value of *arg0 and new memory.
+	{name: "AtomicCompareAndExchange64Variant", argLength: 4, typ: "(UInt64,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Returns old value of *arg0 and new memory.
 	{name: "AtomicAnd64valueVariant", argLength: 3, typ: "(Uint64, Mem)", hasSideEffects: true},    // *arg0 &= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicOr64valueVariant", argLength: 3, typ: "(Uint64, Mem)", hasSideEffects: true},     // *arg0 |= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicAnd32valueVariant", argLength: 3, typ: "(Uint32, Mem)", hasSideEffects: true},    // *arg0 &= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicOr32valueVariant", argLength: 3, typ: "(Uint32, Mem)", hasSideEffects: true},     // *arg0 |= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicAnd8valueVariant", argLength: 3, typ: "(Uint8, Mem)", hasSideEffects: true},      // *arg0 &= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
 	{name: "AtomicOr8valueVariant", argLength: 3, typ: "(Uint8, Mem)", hasSideEffects: true},       // *arg0 |= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
+	{name: "AtomicXor64valueVariant", argLength: 3, typ: "(Uint64, Mem)", hasSideEffects: true},    // *arg0 ^= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
+	{name: "AtomicXor32valueVariant", argLength: 3, typ: "(Uint32, Mem)", hasSideEffects: true},    // *arg0 ^= arg1.  arg2=memory.  Returns old contents of *arg0 and new memory.
+
+	// Relaxed atomic operations (no memory ordering guarantees)
+	// These ops have no acquire/release semantics - use plain loads/stores on architectures that support them.
+	{name: "AtomicLoad8Relaxed", argLength: 2, typ: "(UInt8,Mem)"},                        // Relaxed load from arg0.  arg1=memory.  Returns loaded value and new memory.
+	{name: "AtomicLoad32Relaxed", argLength: 2, typ: "(UInt32,Mem)"},                      // Relaxed load from arg0.  arg1=memory.  Returns loaded value and new memory.
+	{name: "AtomicLoad64Relaxed", argLength: 2, typ: "(UInt64,Mem)"},                      // Relaxed load from arg0.  arg1=memory.  Returns loaded value and new memory.
+	{name: "AtomicLoadPtrRelaxed", argLength: 2, typ: "(BytePtr,Mem)"},                    // Relaxed load from arg0.  arg1=memory.  Returns loaded value and new memory.
+	{name: "AtomicStore8Relaxed", argLength: 3, typ: "Mem", hasSideEffects: true},         // Relaxed store arg1 to *arg0.  arg2=memory.  Returns memory.
+	{name: "AtomicStore32Relaxed", argLength: 3, typ: "Mem", hasSideEffects: true},        // Relaxed store arg1 to *arg0.  arg2=memory.  Returns memory.
+	{name: "AtomicStore64Relaxed", argLength: 3, typ: "Mem", hasSideEffects: true},        // Relaxed store arg1 to *arg0.  arg2=memory.  Returns memory.
+	{name: "AtomicStorePtrRelaxedNoWB", argLength: 3, typ: "Mem", hasSideEffects: true},   // Relaxed store arg1 to *arg0.  arg2=memory.  Returns memory.
 
 	// Publication barrier
 	{name: "PubBarrier", argLength: 1, hasSideEffects: true}, // Do data barrier. arg0=memory.
