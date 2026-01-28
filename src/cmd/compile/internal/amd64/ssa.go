@@ -1284,6 +1284,8 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpAMD64REPMOVSQ:
 		s.Prog(x86.AREP)
 		s.Prog(x86.AMOVSQ)
+	case ssa.OpAMD64MFENCE:
+		s.Prog(x86.AMFENCE)
 	case ssa.OpAMD64LoweredNilCheck:
 		// Issue a load which will fault if the input is nil.
 		// TODO: We currently use the 2-byte instruction TESTB AX, (reg).
@@ -1338,7 +1340,22 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p = s.Prog(x86.ASETEQ)
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg0()
-	case ssa.OpAMD64ANDBlock, ssa.OpAMD64ANDLlock, ssa.OpAMD64ANDQlock, ssa.OpAMD64ORBlock, ssa.OpAMD64ORLlock, ssa.OpAMD64ORQlock:
+	case ssa.OpAMD64CMPXCHGLlockValue, ssa.OpAMD64CMPXCHGQlockValue:
+		// Atomic compare-and-exchange returning old value.
+		// AX contains expected value on entry, and old memory value on exit.
+		if v.Args[1].Reg() != x86.REG_AX {
+			v.Fatalf("input[1] not in AX %s", v.LongString())
+		}
+		s.Prog(x86.ALOCK)
+		p := s.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = v.Args[2].Reg()
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = v.Args[0].Reg()
+		ssagen.AddAux(&p.To, v)
+		// After CMPXCHG, AX contains the old value from memory.
+		// The register allocator ensures v.Reg0() == x86.REG_AX (via cmpxchgValue regInfo).
+	case ssa.OpAMD64ANDBlock, ssa.OpAMD64ANDLlock, ssa.OpAMD64ANDQlock, ssa.OpAMD64ORBlock, ssa.OpAMD64ORLlock, ssa.OpAMD64ORQlock, ssa.OpAMD64XORLlock, ssa.OpAMD64XORQlock:
 		// Atomic memory operations that don't need to return the old value.
 		s.Prog(x86.ALOCK)
 		p := s.Prog(v.Op.Asm())
@@ -1347,7 +1364,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = v.Args[0].Reg()
 		ssagen.AddAux(&p.To, v)
-	case ssa.OpAMD64LoweredAtomicAnd64, ssa.OpAMD64LoweredAtomicOr64, ssa.OpAMD64LoweredAtomicAnd32, ssa.OpAMD64LoweredAtomicOr32:
+	case ssa.OpAMD64LoweredAtomicAnd64, ssa.OpAMD64LoweredAtomicOr64, ssa.OpAMD64LoweredAtomicAnd32, ssa.OpAMD64LoweredAtomicOr32, ssa.OpAMD64LoweredAtomicXor64, ssa.OpAMD64LoweredAtomicXor32:
 		// Atomic memory operations that need to return the old value.
 		// We need to do these with compare-and-exchange to get access to the old value.
 		// loop:
@@ -1363,6 +1380,8 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		switch v.Op {
 		case ssa.OpAMD64LoweredAtomicOr64:
 			op = x86.AORQ
+		case ssa.OpAMD64LoweredAtomicXor64:
+			op = x86.AXORQ
 		case ssa.OpAMD64LoweredAtomicAnd32:
 			mov = x86.AMOVL
 			op = x86.AANDL
@@ -1370,6 +1389,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		case ssa.OpAMD64LoweredAtomicOr32:
 			mov = x86.AMOVL
 			op = x86.AORL
+			cmpxchg = x86.ACMPXCHGL
+		case ssa.OpAMD64LoweredAtomicXor32:
+			mov = x86.AMOVL
+			op = x86.AXORL
 			cmpxchg = x86.ACMPXCHGL
 		}
 		addr := v.Args[0].Reg()

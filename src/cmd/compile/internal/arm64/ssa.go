@@ -553,6 +553,24 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		ssagen.AddAux(&p.From, v)
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg0()
+	case ssa.OpARM64LoweredAtomicLoad8Relaxed,
+		ssa.OpARM64LoweredAtomicLoad32Relaxed,
+		ssa.OpARM64LoweredAtomicLoad64Relaxed:
+		// Relaxed atomic loads use plain MOV (no acquire semantics).
+		p := s.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_MEM
+		p.From.Reg = v.Args[0].Reg()
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg0()
+	case ssa.OpARM64LoweredAtomicStore8Relaxed,
+		ssa.OpARM64LoweredAtomicStore32Relaxed,
+		ssa.OpARM64LoweredAtomicStore64Relaxed:
+		// Relaxed atomic stores use plain MOV (no release semantics).
+		p := s.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = v.Args[1].Reg()
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = v.Args[0].Reg()
 	case ssa.OpARM64MOVBstore,
 		ssa.OpARM64MOVHstore,
 		ssa.OpARM64MOVWstore,
@@ -828,23 +846,108 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p3.To.Type = obj.TYPE_REG
 		p3.To.Reg = out
 
+	case ssa.OpARM64LoweredAtomicCax64,
+		ssa.OpARM64LoweredAtomicCax32:
+		// Atomic compare-and-exchange returning old value (LL/SC version).
+		// LDAXR	(Rarg0), Rout
+		// CMP		Rarg1, Rout
+		// BNE		3(PC)
+		// STLXR	Rarg2, (Rarg0), Rtmp
+		// CBNZ		Rtmp, -4(PC)
+		ld := arm64.ALDAXR
+		st := arm64.ASTLXR
+		cmp := arm64.ACMP
+		if v.Op == ssa.OpARM64LoweredAtomicCax32 {
+			ld = arm64.ALDAXRW
+			st = arm64.ASTLXRW
+			cmp = arm64.ACMPW
+		}
+		r0 := v.Args[0].Reg()
+		r1 := v.Args[1].Reg()
+		r2 := v.Args[2].Reg()
+		out := v.Reg0()
+		p := s.Prog(ld)
+		p.From.Type = obj.TYPE_MEM
+		p.From.Reg = r0
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p1 := s.Prog(cmp)
+		p1.From.Type = obj.TYPE_REG
+		p1.From.Reg = r1
+		p1.Reg = out
+		p2 := s.Prog(arm64.ABNE)
+		p2.To.Type = obj.TYPE_BRANCH
+		p3 := s.Prog(st)
+		p3.From.Type = obj.TYPE_REG
+		p3.From.Reg = r2
+		p3.To.Type = obj.TYPE_MEM
+		p3.To.Reg = r0
+		p3.RegTo2 = arm64.REGTMP
+		p4 := s.Prog(arm64.ACBNZ)
+		p4.From.Type = obj.TYPE_REG
+		p4.From.Reg = arm64.REGTMP
+		p4.To.Type = obj.TYPE_BRANCH
+		p4.To.SetTarget(p)
+		// BNE jumps here - old value is already in out register
+		p5 := s.Prog(obj.ANOP)
+		p2.To.SetTarget(p5)
+
+	case ssa.OpARM64LoweredAtomicCax64Variant,
+		ssa.OpARM64LoweredAtomicCax32Variant:
+		// Atomic compare-and-exchange returning old value (LSE version).
+		// Rarg0: ptr
+		// Rarg1: old
+		// Rarg2: new
+		// MOV  	Rarg1, Rout
+		// CASAL	Rout, (Rarg0), Rarg2
+		// Rout now contains old value
+		cas := arm64.ACASALD
+		mov := arm64.AMOVD
+		if v.Op == ssa.OpARM64LoweredAtomicCax32Variant {
+			cas = arm64.ACASALW
+			mov = arm64.AMOVW
+		}
+		r0 := v.Args[0].Reg()
+		r1 := v.Args[1].Reg()
+		r2 := v.Args[2].Reg()
+		out := v.Reg0()
+
+		// MOV  	Rarg1, Rout
+		p := s.Prog(mov)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = r1
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+
+		// CASAL	Rout, (Rarg0), Rarg2
+		// After CASAL, Rout contains the old value read from memory
+		p1 := s.Prog(cas)
+		p1.From.Type = obj.TYPE_REG
+		p1.From.Reg = out
+		p1.To.Type = obj.TYPE_MEM
+		p1.To.Reg = r0
+		p1.RegTo2 = r2
+
 	case ssa.OpARM64LoweredAtomicAnd64,
 		ssa.OpARM64LoweredAtomicOr64,
+		ssa.OpARM64LoweredAtomicXor64,
 		ssa.OpARM64LoweredAtomicAnd32,
 		ssa.OpARM64LoweredAtomicOr32,
+		ssa.OpARM64LoweredAtomicXor32,
 		ssa.OpARM64LoweredAtomicAnd8,
-		ssa.OpARM64LoweredAtomicOr8:
+		ssa.OpARM64LoweredAtomicOr8,
+		ssa.OpARM64LoweredAtomicXor8:
 		// LDAXR[BW] (Rarg0), Rout
 		// AND/OR	Rarg1, Rout, tmp1
 		// STLXR[BW] tmp1, (Rarg0), Rtmp
 		// CBNZ		Rtmp, -3(PC)
 		ld := arm64.ALDAXR
 		st := arm64.ASTLXR
-		if v.Op == ssa.OpARM64LoweredAtomicAnd32 || v.Op == ssa.OpARM64LoweredAtomicOr32 {
+		if v.Op == ssa.OpARM64LoweredAtomicAnd32 || v.Op == ssa.OpARM64LoweredAtomicOr32 || v.Op == ssa.OpARM64LoweredAtomicXor32 {
 			ld = arm64.ALDAXRW
 			st = arm64.ASTLXRW
 		}
-		if v.Op == ssa.OpARM64LoweredAtomicAnd8 || v.Op == ssa.OpARM64LoweredAtomicOr8 {
+		if v.Op == ssa.OpARM64LoweredAtomicAnd8 || v.Op == ssa.OpARM64LoweredAtomicOr8 || v.Op == ssa.OpARM64LoweredAtomicXor8 {
 			ld = arm64.ALDAXRB
 			st = arm64.ASTLXRB
 		}
@@ -920,6 +1023,28 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 		// LDORAL[BDW]  Rarg1, (Rarg0), Rout
 		p := s.Prog(atomic_or)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = r1
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = r0
+		p.RegTo2 = out
+
+	case ssa.OpARM64LoweredAtomicXor8Variant,
+		ssa.OpARM64LoweredAtomicXor32Variant,
+		ssa.OpARM64LoweredAtomicXor64Variant:
+		atomic_eor := arm64.ALDEORALD
+		if v.Op == ssa.OpARM64LoweredAtomicXor32Variant {
+			atomic_eor = arm64.ALDEORALW
+		}
+		if v.Op == ssa.OpARM64LoweredAtomicXor8Variant {
+			atomic_eor = arm64.ALDEORALB
+		}
+		r0 := v.Args[0].Reg()
+		r1 := v.Args[1].Reg()
+		out := v.Reg0()
+
+		// LDEORAL[BDW]  Rarg1, (Rarg0), Rout
+		p := s.Prog(atomic_eor)
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = r1
 		p.To.Type = obj.TYPE_MEM

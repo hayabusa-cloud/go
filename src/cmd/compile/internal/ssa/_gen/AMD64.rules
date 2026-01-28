@@ -529,6 +529,18 @@
 (AtomicStore64 ptr val mem) => (Select1 (XCHGQ <types.NewTuple(typ.UInt64,types.TypeMem)> val ptr mem))
 (AtomicStorePtrNoWB ptr val mem) => (Select1 (XCHGQ <types.NewTuple(typ.BytePtr,types.TypeMem)> val ptr mem))
 
+// Relaxed atomic loads.  Same as regular atomic loads on x86 (TSO provides sufficient ordering).
+(AtomicLoad8Relaxed ptr mem) => (MOVBatomicload ptr mem)
+(AtomicLoad32Relaxed ptr mem) => (MOVLatomicload ptr mem)
+(AtomicLoad64Relaxed ptr mem) => (MOVQatomicload ptr mem)
+(AtomicLoadPtrRelaxed ptr mem) => (MOVQatomicload ptr mem)
+
+// Relaxed atomic stores.  Use plain MOV (no XCHG needed for relaxed semantics on x86).
+(AtomicStore8Relaxed ptr val mem) => (MOVBstore ptr val mem)
+(AtomicStore32Relaxed ptr val mem) => (MOVLstore ptr val mem)
+(AtomicStore64Relaxed ptr val mem) => (MOVQstore ptr val mem)
+(AtomicStorePtrRelaxedNoWB ptr val mem) => (MOVQstore ptr val mem)
+
 // Atomic exchanges.
 (AtomicExchange8 ptr val mem) => (XCHGB val ptr mem)
 (AtomicExchange32 ptr val mem) => (XCHGL val ptr mem)
@@ -546,6 +558,10 @@
 (AtomicCompareAndSwap32 ptr old new_ mem) => (CMPXCHGLlock ptr old new_ mem)
 (AtomicCompareAndSwap64 ptr old new_ mem) => (CMPXCHGQlock ptr old new_ mem)
 
+// Atomic compare and exchange (returns old value).
+(AtomicCompareAndExchange32 ptr old new_ mem) => (CMPXCHGLlockValue ptr old new_ mem)
+(AtomicCompareAndExchange64 ptr old new_ mem) => (CMPXCHGQlockValue ptr old new_ mem)
+
 // Atomic memory logical operations (old style).
 (AtomicAnd8  ptr val mem) => (ANDBlock ptr val mem)
 (AtomicAnd32 ptr val mem) => (ANDLlock ptr val mem)
@@ -553,10 +569,13 @@
 (AtomicOr32  ptr val mem) => (ORLlock  ptr val mem)
 
 // Atomic memory logical operations (new style).
-(Atomic(And64|And32|Or64|Or32)value ptr val mem) => (LoweredAtomic(And64|And32|Or64|Or32) ptr val mem)
+(Atomic(And64|And32|Or64|Or32|Xor64|Xor32)value ptr val mem) => (LoweredAtomic(And64|And32|Or64|Or32|Xor64|Xor32) ptr val mem)
 
 // Write barrier.
 (WB ...) => (LoweredWB ...)
+
+// MFENCE fence coalescing (duplicate elimination).
+(MFENCE (MFENCE mem)) => (MFENCE mem)
 
 (PanicBounds [kind] x y mem) && boundsABI(kind) == 0 => (LoweredPanicBoundsA [kind] x y mem)
 (PanicBounds [kind] x y mem) && boundsABI(kind) == 1 => (LoweredPanicBoundsB [kind] x y mem)
@@ -1483,6 +1502,10 @@
 	(CMPXCHGQlock [off1+off2] {sym} ptr old new_ mem)
 (CMPXCHGLlock [off1] {sym} (ADDQconst [off2] ptr) old new_ mem) && is32Bit(int64(off1)+int64(off2)) =>
 	(CMPXCHGLlock [off1+off2] {sym} ptr old new_ mem)
+(CMPXCHGQlockValue [off1] {sym} (ADDQconst [off2] ptr) old new_ mem) && is32Bit(int64(off1)+int64(off2)) =>
+	(CMPXCHGQlockValue [off1+off2] {sym} ptr old new_ mem)
+(CMPXCHGLlockValue [off1] {sym} (ADDQconst [off2] ptr) old new_ mem) && is32Bit(int64(off1)+int64(off2)) =>
+	(CMPXCHGLlockValue [off1+off2] {sym} ptr old new_ mem)
 
 // We don't need the conditional move if we know the arg of BSF is not zero.
 (CMOVQEQ x _ (Select1 (BS(F|R)Q (ORQconst [c] _)))) && c != 0 => x
@@ -1669,7 +1692,7 @@
 ((SHL|SHR|SAR)XLload [off] {sym} ptr (MOVLconst [c]) mem) => ((SHL|SHR|SAR)Lconst [int8(c&31)] (MOVLload [off] {sym} ptr mem))
 
 // Convert atomic logical operations to easier ones if we don't use the result.
-(Select1 a:(LoweredAtomic(And64|And32|Or64|Or32) ptr val mem)) && a.Uses == 1 && clobber(a) => ((ANDQ|ANDL|ORQ|ORL)lock ptr val mem)
+(Select1 a:(LoweredAtomic(And64|And32|Or64|Or32|Xor64|Xor32) ptr val mem)) && a.Uses == 1 && clobber(a) => ((ANDQ|ANDL|ORQ|ORL|XORQ|XORL)lock ptr val mem)
 
 // If we are checking the results of an add, use the flags directly from the add.
 // Note that this only works for EQ/NE. ADD sets the CF/OF flags differently

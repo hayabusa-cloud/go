@@ -584,22 +584,50 @@
 (AtomicExchange(8|32|64)       ...) => (LoweredAtomicExchange(8|32|64) ...)
 (AtomicAdd(32|64)            ...) => (LoweredAtomicAdd(32|64)      ...)
 (AtomicCompareAndSwap(32|64) ...) => (LoweredAtomicCas(32|64)      ...)
+(AtomicCompareAndExchange(32|64) ...) => (LoweredAtomicCax(32|64)      ...)
 
 (AtomicAdd(32|64)Variant            ...) => (LoweredAtomicAdd(32|64)Variant      ...)
 (AtomicExchange(8|32|64)Variant       ...) => (LoweredAtomicExchange(8|32|64)Variant ...)
 (AtomicCompareAndSwap(32|64)Variant ...) => (LoweredAtomicCas(32|64)Variant      ...)
+(AtomicCompareAndExchange(32|64)Variant ...) => (LoweredAtomicCax(32|64)Variant      ...)
 
 // Return old contents.
 (AtomicAnd(64|32|8)value            ...) => (LoweredAtomicAnd(64|32|8)            ...)
 (AtomicOr(64|32|8)value             ...) => (LoweredAtomicOr(64|32|8)             ...)
+(AtomicXor(64|32)value              ...) => (LoweredAtomicXor(64|32)              ...)
 (AtomicAnd(64|32|8)valueVariant     ...) => (LoweredAtomicAnd(64|32|8)Variant     ...)
 (AtomicOr(64|32|8)valueVariant      ...) => (LoweredAtomicOr(64|32|8)Variant      ...)
+(AtomicXor(64|32)valueVariant       ...) => (LoweredAtomicXor(64|32)Variant       ...)
+
+// Relaxed atomic operations (no acquire/release semantics).
+// Use plain MOV instead of LDAR/STLR.
+(AtomicLoad8Relaxed   ptr mem) => (LoweredAtomicLoad8Relaxed  ptr mem)
+(AtomicLoad32Relaxed  ptr mem) => (LoweredAtomicLoad32Relaxed ptr mem)
+(AtomicLoad64Relaxed  ptr mem) => (LoweredAtomicLoad64Relaxed ptr mem)
+(AtomicLoadPtrRelaxed ptr mem) => (LoweredAtomicLoad64Relaxed ptr mem)
+(AtomicStore8Relaxed          ptr val mem) => (LoweredAtomicStore8Relaxed  ptr val mem)
+(AtomicStore32Relaxed         ptr val mem) => (LoweredAtomicStore32Relaxed ptr val mem)
+(AtomicStore64Relaxed         ptr val mem) => (LoweredAtomicStore64Relaxed ptr val mem)
+(AtomicStorePtrRelaxedNoWB    ptr val mem) => (LoweredAtomicStore64Relaxed ptr val mem)
 
 // Write barrier.
 (WB ...) => (LoweredWB ...)
 
 // Publication barrier (0xe is ST option)
 (PubBarrier mem) => (DMB [0xe] mem)
+
+// DMB fence coalescing.
+// DMB options: 0x9=ISHLD (acquire), 0xA=ISHST (release), 0xB=ISH (full), 0xE=ST (store-only)
+// Duplicate barriers are eliminated.
+(DMB [a] (DMB [a] mem)) => (DMB [a] mem)
+// Full barrier subsumes weaker barriers.
+(DMB [0xB] (DMB [0x9] mem)) => (DMB [0xB] mem)
+(DMB [0xB] (DMB [0xA] mem)) => (DMB [0xB] mem)
+(DMB [0x9] (DMB [0xB] mem)) => (DMB [0xB] mem)
+(DMB [0xA] (DMB [0xB] mem)) => (DMB [0xB] mem)
+// Acquire + release → full barrier.
+(DMB [0x9] (DMB [0xA] mem)) => (DMB [0xB] mem)
+(DMB [0xA] (DMB [0x9] mem)) => (DMB [0xB] mem)
 
 (PanicBounds [kind] x y mem) && boundsABI(kind) == 0 => (LoweredPanicBoundsA [kind] x y mem)
 (PanicBounds [kind] x y mem) && boundsABI(kind) == 1 => (LoweredPanicBoundsB [kind] x y mem)
