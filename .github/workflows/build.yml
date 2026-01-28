@@ -73,6 +73,7 @@ jobs:
           go test ./cmd/compile/...
 
       - name: Create distribution tarball
+        shell: bash
         run: |
           VERSION=${{ steps.version.outputs.go_version }}
           TARBALL="${VERSION}.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
