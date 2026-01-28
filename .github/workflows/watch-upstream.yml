@@ -1,0 +1,215 @@
+name: Watch upstream Go releases
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if release exists'
+        type: boolean
+        default: false
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      new_versions: ${{ steps.check.outputs.new_versions }}
+      latest_version: ${{ steps.check.outputs.latest_version }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new Go stable releases
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fetch latest stable Go versions from official API
+          RELEASES=$(curl -s 'https://go.dev/dl/?mode=json' | jq -r '
+            [.[] | select(.stable == true) | .version | ltrimstr("go")]
+            | sort_by(split(".") | map(tonumber))
+            | reverse
+            | .[0:5]
+          ')
+          
+          echo "Latest stable releases: $RELEASES"
+          
+          # Get existing atomix releases
+          EXISTING=$(gh release list --json tagName -q '.[].tagName | select(endswith("-atomix"))' 2>/dev/null || echo "")
+          echo "Existing atomix releases: $EXISTING"
+          
+          # Find new versions that don't have atomix releases
+          NEW_VERSIONS=()
+          LATEST=""
+          
+          for VERSION in $(echo "$RELEASES" | jq -r '.[]'); do
+            TAG="go${VERSION}-atomix"
+            if [ "${{ github.event.inputs.force_rebuild }}" = "true" ] || ! echo "$EXISTING" | grep -q "^${TAG}$"; then
+              NEW_VERSIONS+=("$VERSION")
+              if [ -z "$LATEST" ]; then
+                LATEST="$VERSION"
+              fi
+            fi
+          done
+          
+          if [ ${#NEW_VERSIONS[@]} -gt 0 ]; then
+            echo "New versions to build: ${NEW_VERSIONS[*]}"
+            echo "new_versions=$(printf '%s\n' "${NEW_VERSIONS[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST" >> $GITHUB_OUTPUT
+          else
+            echo "No new versions found"
+            echo "new_versions=[]" >> $GITHUB_OUTPUT
+            echo "latest_version=" >> $GITHUB_OUTPUT
+          fi
+
+  rebase-and-build:
+    needs: check-upstream
+    if: ${{ needs.check-upstream.outputs.latest_version != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        version: ${{ fromJson(needs.check-upstream.outputs.new_versions) }}
+    
+    steps:
+      - name: Checkout atomix branch
+        uses: actions/checkout@v4
+        with:
+          ref: release-branch.go1.25-atomix
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/golang/go.git || true
+          git fetch upstream --tags
+
+      - name: Rebase onto new Go version
+        id: rebase
+        continue-on-error: true
+        run: |
+          VERSION="${{ matrix.version }}"
+          TAG="go${VERSION}"
+          
+          echo "Rebasing atomix onto ${TAG}..."
+          
+          # Get the atomix commit (HEAD minus merge commits)
+          ATOMIX_COMMIT=$(git log --oneline --no-merges -1 --format="%H")
+          echo "Atomix commit: $ATOMIX_COMMIT"
+          
+          # Create new branch from upstream tag
+          git checkout -b "atomix-${VERSION}" "${TAG}"
+          
+          # Cherry-pick atomix changes
+          if git cherry-pick "$ATOMIX_COMMIT"; then
+            echo "rebase_success=true" >> $GITHUB_OUTPUT
+            
+            # Update VERSION file to match upstream exactly
+            echo "${TAG}" > VERSION
+            git add VERSION
+            git commit --amend --no-edit
+            
+            echo "Rebase successful for ${VERSION}"
+          else
+            echo "rebase_success=false" >> $GITHUB_OUTPUT
+            echo "Rebase failed - conflicts detected"
+            git cherry-pick --abort || true
+          fi
+
+      - name: Handle rebase failure
+        if: steps.rebase.outputs.rebase_success == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ matrix.version }}';
+            const title = `Rebase conflict for Go ${version}`;
+            const body = `
+            Automated rebase onto Go ${version} failed due to merge conflicts.
+            
+            Manual intervention required:
+            1. Checkout the atomix branch
+            2. Run: \`git rebase --onto go${version} <fork-point> atomix\`
+            3. Resolve conflicts
+            4. Push to \`release-branch.go1.${version.split('.')[1]}-atomix\`
+            
+            The CI will automatically build and release once the branch is pushed.
+            `;
+            
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'rebase-conflict'
+            });
+            
+            const existing = issues.data.find(i => i.title === title);
+            if (!existing) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['rebase-conflict', 'automation']
+              });
+            }
+
+      - name: Regenerate SSA
+        if: steps.rebase.outputs.rebase_success == 'true'
+        run: |
+          # Use system Go to regenerate SSA
+          cd src/cmd/compile/internal/ssa/_gen
+          GOWORK=off go run .
+
+      - name: Commit regenerated files
+        if: steps.rebase.outputs.rebase_success == 'true'
+        run: |
+          if git diff --quiet; then
+            echo "No SSA changes needed"
+          else
+            git add -A
+            git commit --amend --no-edit
+          fi
+
+      - name: Push release branch
+        if: steps.rebase.outputs.rebase_success == 'true'
+        run: |
+          VERSION="${{ matrix.version }}"
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          BRANCH="release-branch.go${MAJOR_MINOR}-atomix"
+          
+          # Force push to the release branch (updates existing or creates new)
+          git push origin "atomix-${VERSION}:${BRANCH}" --force
+          
+          echo "Pushed to ${BRANCH}"
+
+      - name: Trigger build workflow
+        if: steps.rebase.outputs.rebase_success == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ matrix.version }}';
+            const majorMinor = version.split('.').slice(0, 2).join('.');
+            const branch = `release-branch.go${majorMinor}-atomix`;
+            
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml',
+              ref: branch
+            });
+            
+            console.log(`Triggered build workflow for ${branch}`);
