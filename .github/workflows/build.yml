@@ -146,6 +146,7 @@ jobs:
           VERSION=$(cat VERSION | head -1)
           echo "go_version=${VERSION}" >> $GITHUB_OUTPUT
           echo "release_tag=${VERSION}-atomix" >> $GITHUB_OUTPUT
+          echo "go_minor=${VERSION%.*}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -187,7 +188,7 @@ jobs:
             ```
             
             ### Upstream
-            Based on [Go ${{ steps.version.outputs.go_version }}](https://go.dev/doc/go${VERSION%.*})
+            Based on [Go ${{ steps.version.outputs.go_version }}](https://go.dev/doc/${{ steps.version.outputs.go_minor }})
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
