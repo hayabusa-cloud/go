@@ -514,6 +514,8 @@
 (AtomicStore32      ...) => (STLRW ...)
 (AtomicStore64      ...) => (STLR  ...)
 (AtomicStorePtrNoWB ...) => (STLR  ...)
+(AtomicStoreRel32   ptr val mem) => (STLRW <types.TypeMem> ptr val mem)
+(AtomicStoreRel64   ptr val mem) => (STLR  <types.TypeMem> ptr val mem)
 
 (AtomicExchange(8|32|64)       ...) => (LoweredAtomicExchange(8|32|64) ...)
 (AtomicAdd(32|64)            ...) => (LoweredAtomicAdd(32|64)      ...)

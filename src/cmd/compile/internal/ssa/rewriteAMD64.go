@@ -2452,6 +2452,10 @@ func rewriteValueAMD64(v *Value) bool {
 		return rewriteValueAMD64_OpAtomicStorePtrNoWB(v)
 	case OpAtomicStorePtrRelaxedNoWB:
 		return rewriteValueAMD64_OpAtomicStorePtrRelaxedNoWB(v)
+	case OpAtomicStoreRel32:
+		return rewriteValueAMD64_OpAtomicStoreRel32(v)
+	case OpAtomicStoreRel64:
+		return rewriteValueAMD64_OpAtomicStoreRel64(v)
 	case OpAtomicXor32value:
 		return rewriteValueAMD64_OpAtomicXor32value(v)
 	case OpAtomicXor64value:
@@ -66093,6 +66097,36 @@ func rewriteValueAMD64_OpAtomicStorePtrRelaxedNoWB(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (AtomicStorePtrRelaxedNoWB ptr val mem)
+	// result: (MOVQstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVQstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicStoreRel32(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStoreRel32 ptr val mem)
+	// result: (MOVLstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVLstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicStoreRel64(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStoreRel64 ptr val mem)
 	// result: (MOVQstore ptr val mem)
 	for {
 		ptr := v_0
