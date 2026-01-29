@@ -31,7 +31,7 @@ jobs:
         run: |
           # Fetch latest stable Go versions from official API
           RELEASES=$(curl -s 'https://go.dev/dl/?mode=json' | jq -r '
-            [.[] | select(.stable == true) | .version | ltrimstr("go")]
+            [.[] | select(.stable == true) | .version | ltrimstr("go") | select(startswith("1.25."))]
             | sort_by(split(".") | map(tonumber))
             | reverse
             | .[0:5]
@@ -73,6 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: write
     
     strategy:
       fail-fast: false
