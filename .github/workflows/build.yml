@@ -1,0 +1,196 @@
+name: Build atomix-compiler
+
+on:
+  push:
+    branches:
+      - 'release-branch.go*-atomix'
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  BOOTSTRAP_GO_VERSION: '1.25.6'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            runner_arch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            runner_arch: amd64
+            cross: true
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            runner_arch: arm64
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get Go version from VERSION file
+        id: version
+        run: |
+          VERSION=$(cat VERSION | head -1)
+          echo "go_version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building Go version: ${VERSION}"
+
+      - name: Setup bootstrap Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.BOOTSTRAP_GO_VERSION }}
+          cache: false
+
+      - name: Build Go toolchain
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM64: v8.1,lse
+          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+        run: |
+          cd src
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            # Cross-compilation: build make.bash for host first, then target
+            ./make.bash
+          else
+            ./make.bash
+          fi
+
+      - name: Test compiler (native only)
+        if: ${{ !matrix.cross }}
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          export GOROOT="$PWD"
+          cd src
+          go test ./cmd/compile/...
+
+      - name: Create distribution tarball
+        shell: bash
+        run: |
+          VERSION=${{ steps.version.outputs.go_version }}
+          TARBALL="${VERSION}.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          
+          # Create go directory structure matching official layout
+          mkdir -p dist/go/bin
+          
+          # Cross-compile outputs to bin/<goos>_<goarch>/, native to bin/
+          if [[ -d "bin/${{ matrix.goos }}_${{ matrix.goarch }}" ]]; then
+            cp -r bin/${{ matrix.goos }}_${{ matrix.goarch }}/* dist/go/bin/
+          elif [[ -d "bin" ]]; then
+            cp -r bin/* dist/go/bin/ 2>/dev/null || true
+          fi
+          
+          # pkg also has cross-compile structure
+          if [[ -d "pkg/${{ matrix.goos }}_${{ matrix.goarch }}" ]]; then
+            mkdir -p dist/go/pkg
+            cp -r pkg/${{ matrix.goos }}_${{ matrix.goarch }} dist/go/pkg/
+            cp -r pkg/include dist/go/pkg/ 2>/dev/null || true
+            cp -r pkg/tool dist/go/pkg/ 2>/dev/null || true
+          elif [[ -d "pkg" ]]; then
+            cp -r pkg dist/go/ 2>/dev/null || true
+          fi
+          
+          cp -r src dist/go/
+          cp -r lib dist/go/ 2>/dev/null || true
+          cp -r misc dist/go/ 2>/dev/null || true
+          cp -r doc dist/go/ 2>/dev/null || true
+          cp VERSION dist/go/
+          cp LICENSE dist/go/
+          cp README.md dist/go/ 2>/dev/null || true
+          
+          # Create tarball
+          cd dist
+          tar -czf "../${TARBALL}" go
+          cd ..
+          
+          # Generate SHA256 checksum (macOS uses shasum, Linux uses sha256sum)
+          if command -v sha256sum &>/dev/null; then
+            sha256sum "${TARBALL}" > "${TARBALL}.sha256"
+          else
+            shasum -a 256 "${TARBALL}" > "${TARBALL}.sha256"
+          fi
+          
+          echo "Created ${TARBALL}"
+          cat "${TARBALL}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.go_version }}.${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ steps.version.outputs.go_version }}.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            ${{ steps.version.outputs.go_version }}.${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get Go version from VERSION file
+        id: version
+        run: |
+          VERSION=$(cat VERSION | head -1)
+          echo "go_version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "release_tag=${VERSION}-atomix" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: |
+          ls -la artifacts/
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.release_tag }}
+          name: "atomix-${{ steps.version.outputs.go_version }}"
+          body: |
+            ## atomix-compiler ${{ steps.version.outputs.go_version }}
+            
+            This release provides the atomix intrinsics compiler based on Go ${{ steps.version.outputs.go_version }}.
+            
+            ### Features
+            - Zero-overhead atomic operations with explicit memory ordering
+            - ARM64 LSE instructions (requires ARMv8.4+)
+            - AMD64 LOCK prefix instructions
+            
+            ### Platforms
+            - linux/amd64
+            - linux/arm64
+            - darwin/arm64
+            
+            ### Usage
+            Download the tarball for your platform, extract, and set `GOROOT` to the extracted `go` directory.
+            
+            ```bash
+            tar -xzf ${{ steps.version.outputs.go_version }}.linux-amd64.tar.gz
+            export GOROOT=$PWD/go
+            export PATH=$GOROOT/bin:$PATH
+            ```
+            
+            ### Upstream
+            Based on [Go ${{ steps.version.outputs.go_version }}](https://go.dev/doc/go${VERSION%.*})
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.sha256

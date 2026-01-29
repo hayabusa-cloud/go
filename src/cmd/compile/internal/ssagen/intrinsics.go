@@ -409,35 +409,9 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 	makeAtomicGuardedIntrinsicARM64common := func(op0, op1 ssa.Op, typ types.Kind, emit atomicOpEmitter, needReturn bool) intrinsicBuilder {
 
 		return func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
-			if cfg.goarm64.LSE {
-				emit(s, n, args, op1, typ, needReturn)
-			} else {
-				// Target Atomic feature is identified by dynamic detection
-				addr := s.entryNewValue1A(ssa.OpAddr, types.Types[types.TBOOL].PtrTo(), ir.Syms.ARM64HasATOMICS, s.sb)
-				v := s.load(types.Types[types.TBOOL], addr)
-				b := s.endBlock()
-				b.Kind = ssa.BlockIf
-				b.SetControl(v)
-				bTrue := s.f.NewBlock(ssa.BlockPlain)
-				bFalse := s.f.NewBlock(ssa.BlockPlain)
-				bEnd := s.f.NewBlock(ssa.BlockPlain)
-				b.AddEdgeTo(bTrue)
-				b.AddEdgeTo(bFalse)
-				b.Likely = ssa.BranchLikely
-
-				// We have atomic instructions - use it directly.
-				s.startBlock(bTrue)
-				emit(s, n, args, op1, typ, needReturn)
-				s.endBlock().AddEdgeTo(bEnd)
-
-				// Use original instruction sequence.
-				s.startBlock(bFalse)
-				emit(s, n, args, op0, typ, needReturn)
-				s.endBlock().AddEdgeTo(bEnd)
-
-				// Merge results.
-				s.startBlock(bEnd)
-			}
+			// Always use LSE variant (op1) - atomix requires ARM64 v8.4+ with mandatory LSE support.
+			// No runtime detection needed; LSE instructions (SWPAL, LDADDAL, etc.) are always available.
+			emit(s, n, args, op1, typ, needReturn)
 			if needReturn {
 				return s.variable(n, types.Types[typ])
 			} else {
