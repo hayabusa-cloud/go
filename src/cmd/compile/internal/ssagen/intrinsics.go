@@ -2065,17 +2065,17 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 	addF("code.hybscloud.com/atomix/internal/arch", "LoadUintptrAcquire", atomixLoadUintptrAcquire, sys.AMD64, sys.ARM64)
 	addF("code.hybscloud.com/atomix/internal/arch", "LoadPointerAcquire", atomixLoadPointerAcquire, sys.AMD64, sys.ARM64)
 
-	// Helper for atomix Store intrinsics (Release semantics - STLR on ARM64, XCHG on x86)
+	// Helper for atomix Store intrinsics (Release semantics - STLR on ARM64, MOV on x86 TSO)
 	atomixStore32Release := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
-		s.vars[memVar] = s.newValue3(ssa.OpAtomicStore32, types.TypeMem, args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStoreRel32, types.TypeMem, args[0], args[1], s.mem())
 		return nil
 	}
 	atomixStore64Release := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
-		s.vars[memVar] = s.newValue3(ssa.OpAtomicStore64, types.TypeMem, args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStoreRel64, types.TypeMem, args[0], args[1], s.mem())
 		return nil
 	}
 	atomixStoreUintptrRelease := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
-		s.vars[memVar] = s.newValue3(ssa.OpAtomicStore64, types.TypeMem, args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStoreRel64, types.TypeMem, args[0], args[1], s.mem())
 		return nil
 	}
 	atomixStorePointerRelease := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
@@ -2109,7 +2109,7 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 	addF("code.hybscloud.com/atomix/internal/arch", "StoreUintptrRelaxed", atomixStoreUintptrRelaxed, sys.AMD64, sys.ARM64)
 	addF("code.hybscloud.com/atomix/internal/arch", "StorePointerRelaxed", atomixStorePointerRelaxed, sys.AMD64, sys.ARM64)
 
-	// Store operations - Release (STLR on ARM64, XCHG on x86 for full barrier)
+	// Store operations - Release (STLR on ARM64, MOV on x86 TSO)
 	addF("code.hybscloud.com/atomix/internal/arch", "StoreInt32Release", atomixStore32Release, sys.AMD64, sys.ARM64)
 	addF("code.hybscloud.com/atomix/internal/arch", "StoreUint32Release", atomixStore32Release, sys.AMD64, sys.ARM64)
 	addF("code.hybscloud.com/atomix/internal/arch", "StoreInt64Release", atomixStore64Release, sys.AMD64, sys.ARM64)

@@ -535,6 +535,10 @@
 (AtomicLoad64Relaxed ptr mem) => (MOVQatomicload ptr mem)
 (AtomicLoadPtrRelaxed ptr mem) => (MOVQatomicload ptr mem)
 
+// Release atomic stores.  Use plain MOV (x86 TSO provides store-release ordering).
+(AtomicStoreRel32 ptr val mem) => (MOVLstore ptr val mem)
+(AtomicStoreRel64 ptr val mem) => (MOVQstore ptr val mem)
+
 // Relaxed atomic stores.  Use plain MOV (no XCHG needed for relaxed semantics on x86).
 (AtomicStore8Relaxed ptr val mem) => (MOVBstore ptr val mem)
 (AtomicStore32Relaxed ptr val mem) => (MOVLstore ptr val mem)
