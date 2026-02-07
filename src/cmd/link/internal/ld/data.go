@@ -1469,6 +1469,8 @@ func checkSectSize(sect *sym.Section) {
 
 // fixZeroSizedSymbols gives a few special symbols with zero size some space.
 func fixZeroSizedSymbols(ctxt *Link) {
+	ldr := ctxt.loader
+
 	// The values in moduledata are filled out by relocations
 	// pointing to the addresses of these special symbols.
 	// Typically these symbols have no size and are not laid
@@ -1492,11 +1494,29 @@ func fixZeroSizedSymbols(ctxt *Link) {
 	// aren't real symbols, their alignment might not match the
 	// first symbol alignment. Therefore, there are explicitly put at the
 	// beginning of their section with the same alignment.
+
+	defineRuntimeTypes := func() {
+		types := ldr.CreateSymForUpdate("runtime.types", 0)
+		types.SetType(sym.STYPE)
+		types.SetSize(8)
+		types.SetAlign(int32(ctxt.Arch.PtrSize))
+		ldr.SetAttrSpecial(types.Sym(), false)
+	}
+
 	if !(ctxt.DynlinkingGo() && ctxt.HeadType == objabi.Hdarwin) && !(ctxt.HeadType == objabi.Haix && ctxt.LinkMode == LinkExternal) {
+
+		// On AIX, below, we give runtime.types a size.
+		// That means that the type descriptors will actually
+		// follow runtime.types plus that size.
+		// To simplify matters for the runtime,
+		// always give runtime.types a size.
+		if ctxt.HeadType == objabi.Haix {
+			defineRuntimeTypes()
+		}
+
 		return
 	}
 
-	ldr := ctxt.loader
 	bss := ldr.CreateSymForUpdate("runtime.bss", 0)
 	bss.SetSize(8)
 	ldr.SetAttrSpecial(bss.Sym(), false)
@@ -1530,10 +1550,7 @@ func fixZeroSizedSymbols(ctxt *Link) {
 	enoptrdata := ldr.CreateSymForUpdate("runtime.enoptrdata", 0)
 	ldr.SetAttrSpecial(enoptrdata.Sym(), false)
 
-	types := ldr.CreateSymForUpdate("runtime.types", 0)
-	types.SetType(sym.STYPE)
-	types.SetSize(8)
-	ldr.SetAttrSpecial(types.Sym(), false)
+	defineRuntimeTypes()
 
 	etypes := ldr.CreateSymForUpdate("runtime.etypes", 0)
 	etypes.SetType(sym.STYPE)
@@ -2022,6 +2039,13 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 	ldr.SetSymSect(ldr.LookupOrCreateSym("runtime.covctrs", 0), sect)
 	ldr.SetSymSect(ldr.LookupOrCreateSym("runtime.ecovctrs", 0), sect)
 
+	// If we started this blob at an odd alignment, then covctrs will
+	// not be correctly aligned. Each individual entry is aligned properly,
+	// but the start marker may be before any padding inserted to enforce
+	// that alignment. Fix that here. See issue 58936.
+	covCounterDataStartOff += covCounterDataLen % 4
+	covCounterDataLen -= covCounterDataLen % 4
+
 	// Coverage instrumentation counters for libfuzzer.
 	if len(state.data[sym.SLIBFUZZER_8BIT_COUNTER]) > 0 {
 		sect := state.allocateNamedSectionAndAssignSyms(&Segdata, ".go.fuzzcntrs", sym.SLIBFUZZER_8BIT_COUNTER, sym.Sxxx, 06)
@@ -2124,16 +2148,6 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 		xcoffUpdateOuterSize(ctxt, int64(sect.Length), sym.SPCLNTAB)
 	}
 
-	/* typelink */
-	sect = state.allocateNamedDataSection(segro, ".typelink", []sym.SymKind{sym.STYPELINK}, 04)
-
-	typelink := ldr.CreateSymForUpdate("runtime.typelink", 0)
-	ldr.SetSymSect(typelink.Sym(), sect)
-	typelink.SetType(sym.SRODATA)
-	state.datsize += typelink.Size()
-	state.checkdatsize(sym.STYPELINK)
-	sect.Length = uint64(state.datsize) - sect.Vaddr
-
 	/* read-only ELF, Mach-O sections */
 	state.allocateSingleSymSections(segro, sym.SELFROSECT, sym.SRODATA, 04)
 
@@ -2197,6 +2211,14 @@ func (state *dodataState) allocateDataSections(ctxt *Link) {
 			// reference uses a zero offset.
 			// This is unlikely but possible in small
 			// programs with no other read-only data.
+			//
+			// Don't skip forward on AIX because the external
+			// linker, when used, will align symbols itself.
+			// The external linker won't know about this skip,
+			// and will mess up the constant offsets we need
+			// within the type section. On AIX we just live
+			// with the possibility of a broken program
+			// if there is no other read-only data.
 			state.datsize++
 		}
 
@@ -2354,43 +2376,136 @@ func (state *dodataState) dodataSect(ctxt *Link, symn sym.SymKind, syms []loader
 				tail = s
 				continue
 			}
+		} else if ctxt.HeadType == objabi.Haix && ldr.SymName(s) == "runtime.types" {
+			// We always use runtime.types on AIX.
+			// See the comment in fixZeroSizedSymbols.
+			head = s
 		}
 	}
 	zerobase = ldr.Lookup("runtime.zerobase", 0)
 
+	sortHeadTail := func(si, sj loader.Sym) (less bool, matched bool) {
+		switch {
+		case si == head, sj == tail:
+			return true, true
+		case sj == head, si == tail:
+			return false, true
+		}
+		return false, false
+	}
+
+	sortFn := func(i, j int) bool {
+		si, sj := sl[i].sym, sl[j].sym
+		isz, jsz := sl[i].sz, sl[j].sz
+		if ret, matched := sortHeadTail(si, sj); matched {
+			return ret
+		}
+		if sortBySize {
+			switch {
+			// put zerobase right after all the zero-sized symbols,
+			// so zero-sized symbols have the same address as zerobase.
+			case si == zerobase:
+				return jsz != 0 // zerobase < nonzero-sized, zerobase > zero-sized
+			case sj == zerobase:
+				return isz == 0 // 0-sized < zerobase, nonzero-sized > zerobase
+			case isz != jsz:
+				return isz < jsz
+			}
+		} else {
+			iname := sl[i].name
+			jname := sl[j].name
+			if iname != jname {
+				return iname < jname
+			}
+		}
+		return si < sj // break ties by symbol number
+	}
+
 	// Perform the sort.
-	if symn != sym.SPCLNTAB {
+	switch symn {
+	case sym.SPCLNTAB:
+		// PCLNTAB was built internally, and already has the proper order.
+
+	case sym.STYPE:
+		// Sort type descriptors with the typelink flag first,
+		// sorted by type string. The reflect package will use
+		// this to ensure that type descriptor pointers are unique.
+
+		// We define type:* for some links.
+		typeStar := ldr.Lookup("type:*", 0)
+
+		// Compute all the type strings we need once.
+		typelinkStrings := make(map[loader.Sym]string)
+		for _, s := range syms {
+			if ldr.IsTypelink(s) {
+				typelinkStrings[s] = decodetypeStr(ldr, ctxt.Arch, s)
+			}
+		}
+
 		sort.Slice(sl, func(i, j int) bool {
 			si, sj := sl[i].sym, sl[j].sym
-			isz, jsz := sl[i].sz, sl[j].sz
-			switch {
-			case si == head, sj == tail:
+
+			// Sort head and tail regardless of typelink.
+			if ret, matched := sortHeadTail(si, sj); matched {
+				return ret
+			}
+			if typeStar != 0 {
+				// type:* comes first, after runtime.types
+				if si == typeStar {
+					return true
+				} else if sj == typeStar {
+					return false
+				}
+			}
+
+			iTypestr, iIsTypelink := typelinkStrings[si]
+			jTypestr, jIsTypelink := typelinkStrings[sj]
+
+			if iIsTypelink {
+				if jIsTypelink {
+					// typelink symbols sort by type string
+					return iTypestr < jTypestr
+				}
+
+				// typelink < non-typelink
 				return true
-			case sj == head, si == tail:
+			} else if jIsTypelink {
+				// non-typelink greater than typelink
 				return false
 			}
-			if sortBySize {
-				switch {
-				// put zerobase right after all the zero-sized symbols,
-				// so zero-sized symbols have the same address as zerobase.
-				case si == zerobase:
-					return jsz != 0 // zerobase < nonzero-sized, zerobase > zero-sized
-				case sj == zerobase:
-					return isz == 0 // 0-sized < zerobase, nonzero-sized > zerobase
-				case isz != jsz:
-					return isz < jsz
-				}
-			} else {
-				iname := sl[i].name
-				jname := sl[j].name
-				if iname != jname {
-					return iname < jname
-				}
-			}
-			return si < sj // break ties by symbol number
+
+			// non-typelink symbols sort by size as usual
+			return sortFn(i, j)
 		})
-	} else {
-		// PCLNTAB was built internally, and already has the proper order.
+
+		// Find the end of the typelink descriptors.
+		// The size starts at 1 to match the increment in
+		// createRelroSect in allocateDataSections.
+		// TODO: This wastes some space.
+		typeLinkSize := int64(1)
+		for i := range sl {
+			si := sl[i].sym
+			if si == head || si == typeStar {
+				continue
+			}
+			if _, isTypelink := typelinkStrings[si]; !isTypelink {
+				break
+			}
+			typeLinkSize = Rnd(typeLinkSize, int64(symalign(ldr, si)))
+			typeLinkSize += sl[i].sz
+		}
+
+		// Store the length of the typelink descriptors
+		// in the typedesclen field of moduledata.
+		if ctxt.moduledataTypeDescOffset == 0 {
+			Errorf("internal error: phase error: moduledataTypeDescOffset not set in dodataSect")
+		} else {
+			su := ldr.MakeSymbolUpdater(ctxt.Moduledata)
+			su.SetUint(ctxt.Arch, ctxt.moduledataTypeDescOffset, uint64(typeLinkSize))
+		}
+
+	default:
+		sort.Slice(sl, sortFn)
 	}
 
 	// Set alignment, construct result
