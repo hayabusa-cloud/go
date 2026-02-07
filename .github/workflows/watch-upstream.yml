@@ -107,22 +107,39 @@ jobs:
           
           echo "Rebasing atomix onto ${TAG}..."
           
-          # Get the atomix commit (HEAD minus merge commits)
-          ATOMIX_COMMIT=$(git log --oneline --no-merges -1 --format="%H")
-          echo "Atomix commit: $ATOMIX_COMMIT"
-          
-          # Create new branch from upstream tag
+          # Find the upstream base tag that the current atomix branch forked from.
+          # This is the most recent go release tag reachable from HEAD.
+          # Handle failures explicitly so bash -e doesn't terminate the step before
+          # we can write rebase_success to $GITHUB_OUTPUT.
+          set +e
+          BASE_TAG=$(git describe --tags --abbrev=0 --match 'go[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD)
+          DESCRIBE_STATUS=$?
+          set -e
+          if [ "${DESCRIBE_STATUS}" -ne 0 ] || [ -z "${BASE_TAG}" ]; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "Failed to determine base upstream tag matching pattern 'goX.Y.Z' from HEAD."
+            echo "Ensure the current branch history contains a reachable go release tag."
+            exit 0
+          fi
+          echo "Base upstream tag: ${BASE_TAG}"
+
+          # Collect all atomix commits on top of the base tag (oldest first).
+          mapfile -t ATOMIX_COMMITS < <(git rev-list --no-merges --reverse "${BASE_TAG}..HEAD")
+          echo "Atomix commits (${#ATOMIX_COMMITS[@]}):"
+          printf '  %s\n' "${ATOMIX_COMMITS[@]}"
+
+          if [ ${#ATOMIX_COMMITS[@]} -eq 0 ]; then
+            echo "rebase_success=false" >> $GITHUB_OUTPUT
+            echo "No atomix commits found above ${BASE_TAG}"
+            exit 0
+          fi
+
+          # Create new branch from the target upstream tag
           git checkout -b "atomix-${VERSION}" "${TAG}"
-          
-          # Cherry-pick atomix changes
-          if git cherry-pick "$ATOMIX_COMMIT"; then
+
+          # Cherry-pick all atomix commits in order
+          if git cherry-pick "${ATOMIX_COMMITS[@]}"; then
             echo "rebase_success=true" >> $GITHUB_OUTPUT
-            
-            # Update VERSION file to match upstream exactly
-            echo "${TAG}" > VERSION
-            git add VERSION
-            git commit --amend --no-edit
-            
             echo "Rebase successful for ${VERSION}"
           else
             echo "rebase_success=false" >> $GITHUB_OUTPUT
