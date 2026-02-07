@@ -109,7 +109,18 @@ jobs:
           
           # Find the upstream base tag that the current atomix branch forked from.
           # This is the most recent go release tag reachable from HEAD.
+          # Handle failures explicitly so bash -e doesn't terminate the step before
+          # we can write rebase_success to $GITHUB_OUTPUT.
+          set +e
           BASE_TAG=$(git describe --tags --abbrev=0 --match 'go[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD)
+          DESCRIBE_STATUS=$?
+          set -e
+          if [ "${DESCRIBE_STATUS}" -ne 0 ] || [ -z "${BASE_TAG}" ]; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "Failed to determine base upstream tag matching pattern 'goX.Y.Z' from HEAD."
+            echo "Ensure the current branch history contains a reachable go release tag."
+            exit 0
+          fi
           echo "Base upstream tag: ${BASE_TAG}"
 
           # Collect all atomix commits on top of the base tag (oldest first).
