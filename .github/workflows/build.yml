@@ -8,7 +8,7 @@ on:
   workflow_call:
 
 env:
-  BOOTSTRAP_GO_VERSION: '1.25.6'
+  BOOTSTRAP_GO_VERSION: '1.25.7'
 
 jobs:
   build:

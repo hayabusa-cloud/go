@@ -31,7 +31,7 @@ jobs:
         run: |
           # Fetch latest stable Go versions from official API
           RELEASES=$(curl -s 'https://go.dev/dl/?mode=json' | jq -r '
-            [.[] | select(.stable == true) | .version | ltrimstr("go") | select(startswith("1.25."))]
+            [.[] | select(.stable == true) | .version | ltrimstr("go") | select(startswith("1.25.") or startswith("1.26."))]
             | sort_by(split(".") | map(tonumber))
             | reverse
             | .[0:5]
@@ -82,11 +82,19 @@ jobs:
         version: ${{ fromJson(needs.check-upstream.outputs.new_versions) }}
     
     steps:
-      - name: Checkout atomix branch
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: release-branch.go1.25-atomix
           fetch-depth: 0
+
+      - name: Checkout release branch for version series
+        id: branch
+        run: |
+          VERSION="${{ matrix.version }}"
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          BRANCH="release-branch.go${MAJOR_MINOR}-atomix"
+          echo "name=${BRANCH}" >> $GITHUB_OUTPUT
+          git checkout "${BRANCH}"
 
       - name: Configure Git
         run: |
