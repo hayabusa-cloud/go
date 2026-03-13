@@ -8,7 +8,7 @@ on:
   workflow_call:
 
 env:
-  BOOTSTRAP_GO_VERSION: '1.25.7'
+  BOOTSTRAP_GO_VERSION: '1.25.8'
 
 jobs:
   build:
@@ -34,7 +34,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get Go version from VERSION file
         id: version
@@ -44,7 +44,7 @@ jobs:
           echo "Building Go version: ${VERSION}"
 
       - name: Setup bootstrap Go toolchain
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.BOOTSTRAP_GO_VERSION }}
           cache: false
@@ -122,7 +122,7 @@ jobs:
           cat "${TARBALL}.sha256"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.version.outputs.go_version }}.${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -138,7 +138,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get Go version from VERSION file
         id: version
@@ -149,7 +149,7 @@ jobs:
           echo "go_minor=${VERSION%.*}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true

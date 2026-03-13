@@ -33,7 +33,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -44,7 +44,7 @@ jobs:
         run: |
           # Fetch latest stable Go versions from official API
           RELEASES=$(curl -s 'https://go.dev/dl/?mode=json' | jq -r '
-            [.[] | select(.stable == true) | .version | ltrimstr("go") | select(startswith("1.25.") or startswith("1.26."))]
+            [.[] | select(.stable == true) | .version | ltrimstr("go") | select(startswith("1.25.") or startswith("1.26.") or startswith("1.27."))]
             | sort_by(split(".") | map(tonumber))
             | reverse
             | .[0:5]
@@ -97,7 +97,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -172,7 +172,7 @@ jobs:
       - name: Handle rebase failure
         if: steps.rebase.outputs.rebase_success == 'false'
         continue-on-error: true
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const version = '${{ matrix.version }}';
@@ -253,7 +253,7 @@ jobs:
 
       - name: Trigger build workflow
         if: steps.rebase.outputs.rebase_success == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const version = '${{ matrix.version }}';
