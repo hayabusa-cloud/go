@@ -12,7 +12,20 @@ on:
         default: false
 
 jobs:
+  validate-dispatch-ref:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ensure manual runs use atomix
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ "${{ github.ref_name }}" != "atomix" ]; then
+            echo "::error title=Invalid workflow dispatch ref::Run this workflow on 'atomix', not '${{ github.ref_name }}'."
+            exit 1
+          fi
+
   check-upstream:
+    needs: validate-dispatch-ref
     runs-on: ubuntu-latest
     outputs:
       new_versions: ${{ steps.check.outputs.new_versions }}
