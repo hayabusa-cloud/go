@@ -72,6 +72,7 @@ jobs:
     if: ${{ needs.check-upstream.outputs.latest_version != '' }}
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       issues: write
     
@@ -157,6 +158,7 @@ jobs:
 
       - name: Handle rebase failure
         if: steps.rebase.outputs.rebase_success == 'false'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -173,24 +175,28 @@ jobs:
             
             The CI will automatically build and release once the branch is pushed.
             `;
-            
-            // Check if issue already exists
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'rebase-conflict'
-            });
-            
-            const existing = issues.data.find(i => i.title === title);
-            if (!existing) {
-              await github.rest.issues.create({
+
+            try {
+              // Check if issue already exists
+              const issues = await github.rest.issues.listForRepo({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: title,
-                body: body,
-                labels: ['rebase-conflict', 'automation']
+                state: 'open',
+                labels: 'rebase-conflict'
               });
+
+              const existing = issues.data.find(i => i.title === title);
+              if (!existing) {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: title,
+                  body: body,
+                  labels: ['rebase-conflict', 'automation']
+                });
+              }
+            } catch (error) {
+              core.warning(`Failed to create or find rebase conflict issue for Go ${version}: ${error.message}`);
             }
 
       - name: Regenerate SSA
