@@ -120,53 +120,64 @@ jobs:
           git remote add upstream https://github.com/golang/go.git || true
           git fetch upstream --tags
 
-      - name: Rebase onto new Go version
+      - name: Apply Atomix patch onto new Go version
         id: rebase
         continue-on-error: true
         run: |
           VERSION="${{ matrix.version }}"
           TAG="go${VERSION}"
           
-          echo "Rebasing atomix onto ${TAG}..."
-          
-          # Find the upstream base tag that the current atomix branch forked from.
-          # This is the most recent go release tag reachable from HEAD.
-          # Handle failures explicitly so bash -e doesn't terminate the step before
-          # we can write rebase_success to $GITHUB_OUTPUT.
-          set +e
-          BASE_TAG=$(git describe --tags --abbrev=0 --match 'go[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD)
-          DESCRIBE_STATUS=$?
-          set -e
-          if [ "${DESCRIBE_STATUS}" -ne 0 ] || [ -z "${BASE_TAG}" ]; then
+          echo "Applying Atomix patch onto ${TAG}..."
+
+          CURRENT_TAG=$(sed -n '1p' VERSION)
+          if ! [[ "${CURRENT_TAG}" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "rebase_success=false" >> "$GITHUB_OUTPUT"
-            echo "Failed to determine base upstream tag matching pattern 'goX.Y.Z' from HEAD."
-            echo "Ensure the current branch history contains a reachable go release tag."
+            echo "Failed to determine current upstream content tag from VERSION."
+            echo "Expected VERSION first line to match goX.Y.Z, got '${CURRENT_TAG}'."
             exit 0
           fi
-          echo "Base upstream tag: ${BASE_TAG}"
+          if ! git rev-parse -q --verify "refs/tags/${CURRENT_TAG}^{commit}" >/dev/null; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "Current upstream content tag ${CURRENT_TAG} is not available locally."
+            echo "Ensure the upstream Go tags were fetched before this step."
+            exit 0
+          fi
+          if ! git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "Target upstream tag ${TAG} is not available locally."
+            echo "Ensure the upstream Go tags were fetched before this step."
+            exit 0
+          fi
+          echo "Current upstream content tag: ${CURRENT_TAG}"
 
-          # Collect all atomix commits on top of the base tag (oldest first).
-          mapfile -t ATOMIX_COMMITS < <(git rev-list --no-merges --reverse "${BASE_TAG}..HEAD")
-          echo "Atomix commits (${#ATOMIX_COMMITS[@]}):"
-          printf '  %s\n' "${ATOMIX_COMMITS[@]}"
+          PATCH_FILE=$(mktemp)
+          git diff --binary "${CURRENT_TAG}..HEAD" -- . ':(exclude).github/workflows/**' > "${PATCH_FILE}"
 
-          if [ ${#ATOMIX_COMMITS[@]} -eq 0 ]; then
-            echo "rebase_success=false" >> $GITHUB_OUTPUT
-            echo "No atomix commits found above ${BASE_TAG}"
+          if [ ! -s "${PATCH_FILE}" ]; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "No Atomix patch found above ${CURRENT_TAG}."
             exit 0
           fi
 
-          # Create new branch from the target upstream tag
+          # Create new branch from the target upstream tag and apply the Atomix
+          # source delta by content. Release branches may contain aggregate
+          # upstream updates whose topology still points at an older Go tag, so
+          # replaying commits from a reachable tag can incorrectly replay the
+          # upstream delta itself.
           git checkout -b "atomix-${VERSION}" "${TAG}"
 
-          # Cherry-pick all atomix commits in order
-          if git cherry-pick "${ATOMIX_COMMITS[@]}"; then
+          if git apply --3way --index "${PATCH_FILE}"; then
+            if git diff --cached --quiet; then
+              echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+              echo "Atomix patch applied without staged changes."
+              exit 0
+            fi
+            git commit -m "cmd/compile: apply atomix intrinsics to Go ${VERSION}"
             echo "rebase_success=true" >> $GITHUB_OUTPUT
-            echo "Rebase successful for ${VERSION}"
+            echo "Atomix patch applied successfully for ${VERSION}"
           else
             echo "rebase_success=false" >> $GITHUB_OUTPUT
-            echo "Rebase failed - conflicts detected"
-            git cherry-pick --abort || true
+            echo "Atomix patch failed - conflicts detected"
           fi
 
       - name: Handle rebase failure
@@ -178,13 +189,15 @@ jobs:
             const version = '${{ matrix.version }}';
             const title = `Rebase conflict for Go ${version}`;
             const body = `
-            Automated rebase onto Go ${version} failed due to merge conflicts.
+            Automated Atomix patch application onto Go ${version} failed due to merge conflicts.
             
             Manual intervention required:
-            1. Checkout the atomix branch
-            2. Run: \`git rebase --onto go${version} <fork-point> atomix\`
-            3. Resolve conflicts
-            4. Push to \`release-branch.go1.${version.split('.')[1]}-atomix\`
+            1. Checkout \`release-branch.go${version.split('.').slice(0, 2).join('.')}-atomix\`
+            2. Read the current upstream content tag from \`VERSION\`
+            3. Generate the Atomix patch with: \`git diff --binary <current-tag>..HEAD -- . ':(exclude).github/workflows/**'\`
+            4. Apply that patch onto \`go${version}\`, resolve conflicts, and regenerate SSA
+            5. Restore CI workflows from \`atomix\`
+            6. Push to \`release-branch.go${version.split('.').slice(0, 2).join('.')}-atomix\`
             
             The CI will automatically build and release once the branch is pushed.
             `;
