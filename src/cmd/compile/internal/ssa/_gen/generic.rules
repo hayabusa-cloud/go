@@ -2843,3 +2843,62 @@
   && clobber(sbts)
   && clobber(key)
 => (StaticLECall {f} [argsize] dict_ (StringMake <typ.String> ptr len) mem)
+
+// Transform some CondSelect into math operations.
+// if b { x++ } => x += b // but not on arm64 because it has CSINC
+(CondSelect (Add8 <t> x (Const8 [1])) x bool) && config.arch != "arm64" => (Add8 x (CvtBoolToUint8 <t> bool))
+(CondSelect (Add(64|32|16) <t> x (Const(64|32|16) [1])) x bool) && config.arch != "arm64" => (Add(64|32|16) x (ZeroExt8to(64|32|16) <t> (CvtBoolToUint8 <types.Types[types.TUINT8]> bool)))
+
+// if b { x-- } => x -= b
+(CondSelect (Add8 <t> x (Const8 [-1])) x bool) => (Sub8 x (CvtBoolToUint8 <t> bool))
+(CondSelect (Add(64|32|16) <t> x (Const(64|32|16) [-1])) x bool) => (Sub(64|32|16) x (ZeroExt8to(64|32|16) <t> (CvtBoolToUint8 <types.Types[types.TUINT8]> bool)))
+
+// if b { x <<= 1 } => x <<= b
+(CondSelect (Lsh(64|32|16|8)x64 x (Const64 [1])) x bool) => (Lsh(64|32|16|8)x8 [true] x (CvtBoolToUint8 <types.Types[types.TUINT8]> bool))
+
+// if b { x >>= 1 } => x >>= b
+(CondSelect (Rsh(64|32|16|8)x64 x (Const64 [1])) x bool) => (Rsh(64|32|16|8)x8 [true] x (CvtBoolToUint8 <types.Types[types.TUINT8]> bool))
+(CondSelect (Rsh(64|32|16|8)Ux64 x (Const64 [1])) x bool) => (Rsh(64|32|16|8)Ux8 [true] x (CvtBoolToUint8 <types.Types[types.TUINT8]> bool))
+
+// bool(int(x)) => x
+(Neq8                                (CvtBoolToUint8 x)  (Const8          [0])) => x
+(Neq8                                (CvtBoolToUint8 x)  (Const8          [1])) => (Not x)
+(Eq8                                 (CvtBoolToUint8 x)  (Const8          [1])) => x
+(Eq8                                 (CvtBoolToUint8 x)  (Const8          [0])) => (Not x)
+(Neq(64|32|16) (ZeroExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [0])) => x
+(Neq(64|32|16) (ZeroExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [1])) => (Not x)
+(Eq(64|32|16)  (ZeroExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [1])) => x
+(Eq(64|32|16)  (ZeroExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [0])) => (Not x)
+(Neq(64|32|16) (SignExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [0])) => x
+(Neq(64|32|16) (SignExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [1])) => (Not x)
+(Eq(64|32|16)  (SignExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [1])) => x
+(Eq(64|32|16)  (SignExt8to(64|32|16) (CvtBoolToUint8 x)) (Const(64|32|16) [0])) => (Not x)
+
+// Atomic operation constant folding
+// AtomicAdd with 0 is just a load (Add returns new value = old + 0 = old)
+(AtomicAdd32 ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAdd64 ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicAdd32Variant ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAdd64Variant ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+
+// AtomicOr with 0 is just a load (returns old value, value unchanged)
+(AtomicOr64value ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicOr32value ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicOr8value ptr (Const8 [0]) mem) => (AtomicLoad8 ptr mem)
+(AtomicOr64valueVariant ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicOr32valueVariant ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicOr8valueVariant ptr (Const8 [0]) mem) => (AtomicLoad8 ptr mem)
+
+// AtomicAnd with all-ones is just a load (returns old value, value unchanged)
+(AtomicAnd64value ptr (Const64 [-1]) mem) => (AtomicLoad64 ptr mem)
+(AtomicAnd32value ptr (Const32 [-1]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAnd8value ptr (Const8 [-1]) mem) => (AtomicLoad8 ptr mem)
+(AtomicAnd64valueVariant ptr (Const64 [-1]) mem) => (AtomicLoad64 ptr mem)
+(AtomicAnd32valueVariant ptr (Const32 [-1]) mem) => (AtomicLoad32 ptr mem)
+(AtomicAnd8valueVariant ptr (Const8 [-1]) mem) => (AtomicLoad8 ptr mem)
+
+// AtomicXor with 0 is just a load (returns old value, value unchanged)
+(AtomicXor64value ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicXor32value ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)
+(AtomicXor64valueVariant ptr (Const64 [0]) mem) => (AtomicLoad64 ptr mem)
+(AtomicXor32valueVariant ptr (Const32 [0]) mem) => (AtomicLoad32 ptr mem)

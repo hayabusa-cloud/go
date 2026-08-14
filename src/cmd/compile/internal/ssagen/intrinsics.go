@@ -402,35 +402,9 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 	makeAtomicGuardedIntrinsicARM64common := func(op0, op1 ssa.Op, typ types.Kind, emit atomicOpEmitter, needReturn bool) intrinsicBuilder {
 
 		return func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
-			if cfg.goarm64.LSE {
-				emit(s, n, args, op1, typ, needReturn)
-			} else {
-				// Target Atomic feature is identified by dynamic detection
-				addr := s.entryNewValue1A(ssa.OpAddr, types.Types[types.TBOOL].PtrTo(), ir.Syms.ARM64HasATOMICS, s.sb)
-				v := s.load(types.Types[types.TBOOL], addr)
-				b := s.endBlock()
-				b.Kind = ssa.BlockIf
-				b.SetControl(v)
-				bTrue := s.f.NewBlock(ssa.BlockPlain)
-				bFalse := s.f.NewBlock(ssa.BlockPlain)
-				bEnd := s.f.NewBlock(ssa.BlockPlain)
-				b.AddEdgeTo(bTrue)
-				b.AddEdgeTo(bFalse)
-				b.Likely = ssa.BranchLikely
-
-				// We have atomic instructions - use it directly.
-				s.startBlock(bTrue)
-				emit(s, n, args, op1, typ, needReturn)
-				s.endBlock().AddEdgeTo(bEnd)
-
-				// Use original instruction sequence.
-				s.startBlock(bFalse)
-				emit(s, n, args, op0, typ, needReturn)
-				s.endBlock().AddEdgeTo(bEnd)
-
-				// Merge results.
-				s.startBlock(bEnd)
-			}
+			// Always use LSE variant (op1) - atomix requires ARM64 v8.4+ with mandatory LSE support.
+			// No runtime detection needed; LSE instructions (SWPAL, LDADDAL, etc.) are always available.
+			emit(s, n, args, op1, typ, needReturn)
 			if needReturn {
 				return s.variable(n, types.Types[typ])
 			} else {
@@ -1308,6 +1282,871 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 	alias("sync/atomic", "OrInt64", "internal/runtime/atomic", "Or64", sys.ArchARM64, sys.ArchAMD64, sys.ArchLoong64)
 	alias("sync/atomic", "OrUint64", "internal/runtime/atomic", "Or64", sys.ArchARM64, sys.ArchAMD64, sys.ArchLoong64)
 	alias("sync/atomic", "OrUintptr", "internal/runtime/atomic", "Or64", sys.ArchARM64, sys.ArchAMD64, sys.ArchLoong64)
+
+	/******** code.hybscloud.com/atomix ********/
+
+	// atomix intrinsics for code.hybscloud.com/atomix/internal/arch package.
+	// These provide zero-overhead atomic operations with explicit memory ordering.
+	// On x86-64 TSO, all orderings compile to the same instructions (LOCK prefix).
+	// On ARM64, different orderings use different instruction suffixes.
+
+	// Helper for atomix Swap intrinsics
+	atomixSwap32 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicExchange32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixSwap32u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicExchange32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixSwap64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixSwap64u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+	atomixSwapUintptr := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+	atomixSwapPointer := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUNSAFEPTR], v)
+	}
+
+	// ARM64 LSE-guarded intrinsics for atomix use runtime detection via makeAtomicGuardedIntrinsicARM64.
+	// This ensures LSE instructions (SWPAL, LDADDAL, etc.) are used on Graviton4 and other modern ARM64
+	// CPUs that support LSE, while falling back to LL/SC loops on older hardware.
+	// Note: The atomicEmitterARM64 defined earlier in this file is reused for atomix operations.
+
+	// Swap operations - Relaxed (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32Relaxed", atomixSwap32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32Relaxed", atomixSwap32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64Relaxed", atomixSwap64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64Relaxed", atomixSwap64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrRelaxed", atomixSwapUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerRelaxed", atomixSwapPointer, sys.AMD64)
+	// Swap operations - Relaxed (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUNSAFEPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Swap operations - Acquire (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32Acquire", atomixSwap32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32Acquire", atomixSwap32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64Acquire", atomixSwap64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64Acquire", atomixSwap64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrAcquire", atomixSwapUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerAcquire", atomixSwapPointer, sys.AMD64)
+	// Swap operations - Acquire (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUNSAFEPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Swap operations - Release (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32Release", atomixSwap32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32Release", atomixSwap32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64Release", atomixSwap64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64Release", atomixSwap64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrRelease", atomixSwapUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerRelease", atomixSwapPointer, sys.AMD64)
+	// Swap operations - Release (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUNSAFEPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Swap operations - AcqRel (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32AcqRel", atomixSwap32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32AcqRel", atomixSwap32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64AcqRel", atomixSwap64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64AcqRel", atomixSwap64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrAcqRel", atomixSwapUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerAcqRel", atomixSwapPointer, sys.AMD64)
+	// Swap operations - AcqRel (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange32, ssa.OpAtomicExchange32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapInt64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUint64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapUintptrAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "SwapPointerAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicExchange64, ssa.OpAtomicExchange64Variant, types.TUNSAFEPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Helper for atomix CAS intrinsics (returns bool) - AMD64 version
+	atomixCas32AMD64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndSwap32, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TBOOL], v)
+	}
+	atomixCas64AMD64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndSwap64, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TBOOL], v)
+	}
+
+	// Helper for atomix CAS intrinsics - ARM64 version with LSE support
+	atomixCasEmitterARM64 := func(s *state, n *ir.CallExpr, args []*ssa.Value, op ssa.Op, typ types.Kind, needReturn bool) {
+		v := s.newValue4(op, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		if needReturn {
+			s.vars[n] = s.newValue1(ssa.OpSelect0, types.Types[typ], v)
+		}
+	}
+
+	// CAS operations - Relaxed
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32Relaxed", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32Relaxed", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64Relaxed", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64Relaxed", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrRelaxed", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerRelaxed", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+
+	// CAS operations - Acquire
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32Acquire", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32Acquire", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64Acquire", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64Acquire", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrAcquire", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerAcquire", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+
+	// CAS operations - Release
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32Release", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32Release", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64Release", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64Release", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrRelease", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerRelease", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+
+	// CAS operations - AcqRel
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32AcqRel", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32AcqRel", atomixCas32AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64AcqRel", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64AcqRel", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrAcqRel", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerAcqRel", atomixCas64AMD64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasInt64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUint64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasUintptrAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CasPointerAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TBOOL, atomixCasEmitterARM64), sys.ARM64)
+
+	// Helper for atomix CAX intrinsics (returns old value)
+	atomixCax32 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndExchange32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixCax32u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndExchange32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixCax64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixCax64u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+	atomixCaxUintptr := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+	atomixCaxPointer := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue4(ssa.OpAtomicCompareAndExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], args[2], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUNSAFEPTR], v)
+	}
+
+	// CAX operations - Relaxed
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt32Relaxed", atomixCax32, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint32Relaxed", atomixCax32u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt64Relaxed", atomixCax64, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint64Relaxed", atomixCax64u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUintptrRelaxed", atomixCaxUintptr, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxPointerRelaxed", atomixCaxPointer, sys.AMD64, sys.ARM64)
+
+	// CAX operations - Acquire
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt32Acquire", atomixCax32, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint32Acquire", atomixCax32u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt64Acquire", atomixCax64, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint64Acquire", atomixCax64u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUintptrAcquire", atomixCaxUintptr, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxPointerAcquire", atomixCaxPointer, sys.AMD64, sys.ARM64)
+
+	// CAX operations - Release
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt32Release", atomixCax32, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint32Release", atomixCax32u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt64Release", atomixCax64, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint64Release", atomixCax64u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUintptrRelease", atomixCaxUintptr, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxPointerRelease", atomixCaxPointer, sys.AMD64, sys.ARM64)
+
+	// CAX operations - AcqRel
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt32AcqRel", atomixCax32, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint32AcqRel", atomixCax32u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxInt64AcqRel", atomixCax64, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUint64AcqRel", atomixCax64u, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxUintptrAcqRel", atomixCaxUintptr, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "CaxPointerAcqRel", atomixCaxPointer, sys.AMD64, sys.ARM64)
+
+	// Helper for atomix Add intrinsics (returns new value)
+	atomixAdd32 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAdd32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixAdd32u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAdd32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixAdd64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAdd64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixAdd64u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAdd64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+	atomixAddUintptr := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAdd64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+
+	// Add operations - Relaxed (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32Relaxed", atomixAdd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32Relaxed", atomixAdd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64Relaxed", atomixAdd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64Relaxed", atomixAdd64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrRelaxed", atomixAddUintptr, sys.AMD64)
+	// Add operations - Relaxed (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Add operations - Acquire (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32Acquire", atomixAdd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32Acquire", atomixAdd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64Acquire", atomixAdd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64Acquire", atomixAdd64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrAcquire", atomixAddUintptr, sys.AMD64)
+	// Add operations - Acquire (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Add operations - Release (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32Release", atomixAdd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32Release", atomixAdd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64Release", atomixAdd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64Release", atomixAdd64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrRelease", atomixAddUintptr, sys.AMD64)
+	// Add operations - Release (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Add operations - AcqRel (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32AcqRel", atomixAdd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32AcqRel", atomixAdd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64AcqRel", atomixAdd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64AcqRel", atomixAdd64u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrAcqRel", atomixAddUintptr, sys.AMD64)
+	// Add operations - AcqRel (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddInt64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUint64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AddUintptrAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd64, ssa.OpAtomicAdd64Variant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Helper for atomix And intrinsics (returns old value)
+	atomixAnd32 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAnd32value, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixAnd32u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAnd32value, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixAnd64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAnd64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixAnd64u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAnd64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+
+	// And operations - Relaxed (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32Relaxed", atomixAnd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32Relaxed", atomixAnd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64Relaxed", atomixAnd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64Relaxed", atomixAnd64u, sys.AMD64)
+	// And operations - Relaxed (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// And operations - Acquire (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32Acquire", atomixAnd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32Acquire", atomixAnd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64Acquire", atomixAnd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64Acquire", atomixAnd64u, sys.AMD64)
+	// And operations - Acquire (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// And operations - Release (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32Release", atomixAnd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32Release", atomixAnd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64Release", atomixAnd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64Release", atomixAnd64u, sys.AMD64)
+	// And operations - Release (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// And operations - AcqRel (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32AcqRel", atomixAnd32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32AcqRel", atomixAnd32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64AcqRel", atomixAnd64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64AcqRel", atomixAnd64u, sys.AMD64)
+	// And operations - AcqRel (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd32value, ssa.OpAtomicAnd32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndInt64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUint64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Helper for atomix Or intrinsics (returns old value)
+	atomixOr32 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicOr32value, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixOr32u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicOr32value, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixOr64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicOr64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixOr64u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicOr64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+
+	// Or operations - Relaxed (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32Relaxed", atomixOr32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32Relaxed", atomixOr32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64Relaxed", atomixOr64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64Relaxed", atomixOr64u, sys.AMD64)
+	// Or operations - Relaxed (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Or operations - Acquire (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32Acquire", atomixOr32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32Acquire", atomixOr32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64Acquire", atomixOr64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64Acquire", atomixOr64u, sys.AMD64)
+	// Or operations - Acquire (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Or operations - Release (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32Release", atomixOr32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32Release", atomixOr32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64Release", atomixOr64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64Release", atomixOr64u, sys.AMD64)
+	// Or operations - Release (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Or operations - AcqRel (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32AcqRel", atomixOr32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32AcqRel", atomixOr32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64AcqRel", atomixOr64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64AcqRel", atomixOr64u, sys.AMD64)
+	// Or operations - AcqRel (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32value, ssa.OpAtomicOr32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrInt64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUint64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Helper for atomix And/Or Uintptr intrinsics
+	atomixAndUintptr := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicAnd64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+	atomixOrUintptr := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicOr64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+
+	// And Uintptr operations - all orderings (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrRelaxed", atomixAndUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrAcquire", atomixAndUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrRelease", atomixAndUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrAcqRel", atomixAndUintptr, sys.AMD64)
+	// And Uintptr operations - all orderings (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "AndUintptrAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAnd64value, ssa.OpAtomicAnd64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Or Uintptr operations - all orderings (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrRelaxed", atomixOrUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrAcquire", atomixOrUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrRelease", atomixOrUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrAcqRel", atomixOrUintptr, sys.AMD64)
+	// Or Uintptr operations - all orderings (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "OrUintptrAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr64value, ssa.OpAtomicOr64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Helper for atomix Xor intrinsics (returns old value)
+	atomixXor32 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicXor32value, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixXor32u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicXor32value, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixXor64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicXor64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixXor64u := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicXor64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+
+	// Xor operations - Relaxed (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32Relaxed", atomixXor32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32Relaxed", atomixXor32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64Relaxed", atomixXor64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64Relaxed", atomixXor64u, sys.AMD64)
+	// Xor operations - Relaxed (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64Relaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Xor operations - Acquire (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32Acquire", atomixXor32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32Acquire", atomixXor32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64Acquire", atomixXor64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64Acquire", atomixXor64u, sys.AMD64)
+	// Xor operations - Acquire (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64Acquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Xor operations - Release (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32Release", atomixXor32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32Release", atomixXor32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64Release", atomixXor64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64Release", atomixXor64u, sys.AMD64)
+	// Xor operations - Release (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64Release",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Xor operations - AcqRel (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32AcqRel", atomixXor32, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32AcqRel", atomixXor32u, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64AcqRel", atomixXor64, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64AcqRel", atomixXor64u, sys.AMD64)
+	// Xor operations - AcqRel (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint32AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor32value, ssa.OpAtomicXor32valueVariant, types.TUINT32, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorInt64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TINT64, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUint64AcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINT64, atomicEmitterARM64), sys.ARM64)
+
+	// Helper for atomix Xor Uintptr intrinsics
+	atomixXorUintptr := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue3(ssa.OpAtomicXor64value, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+
+	// Xor Uintptr operations - all orderings (AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrRelaxed", atomixXorUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrAcquire", atomixXorUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrRelease", atomixXorUintptr, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrAcqRel", atomixXorUintptr, sys.AMD64)
+	// Xor Uintptr operations - all orderings (ARM64 with runtime LSE detection)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrRelaxed",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrAcquire",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrRelease",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "XorUintptrAcqRel",
+		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicXor64value, ssa.OpAtomicXor64valueVariant, types.TUINTPTR, atomicEmitterARM64), sys.ARM64)
+
+	// Helper for atomix Load intrinsics (Acquire semantics - uses LDAR on ARM64)
+	atomixLoad32Acquire := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixLoad32uAcquire := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixLoad64Acquire := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixLoad64uAcquire := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+	atomixLoadUintptrAcquire := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+	atomixLoadPointerAcquire := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoadPtr, types.NewTuple(types.Types[types.TUNSAFEPTR], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUNSAFEPTR], v)
+	}
+
+	// Helper for atomix Load intrinsics (Relaxed semantics - uses plain MOV on ARM64)
+	atomixLoad32Relaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad32Relaxed, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT32], v)
+	}
+	atomixLoad32uRelaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad32Relaxed, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
+	}
+	atomixLoad64Relaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad64Relaxed, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TINT64], v)
+	}
+	atomixLoad64uRelaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad64Relaxed, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
+	}
+	atomixLoadUintptrRelaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoad64Relaxed, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUINTPTR], v)
+	}
+	atomixLoadPointerRelaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		v := s.newValue2(ssa.OpAtomicLoadPtrRelaxed, types.NewTuple(types.Types[types.TUNSAFEPTR], types.TypeMem), args[0], s.mem())
+		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+		return s.newValue1(ssa.OpSelect0, types.Types[types.TUNSAFEPTR], v)
+	}
+
+	// Load operations - Relaxed (plain MOV on ARM64, no acquire semantics)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadInt32Relaxed", atomixLoad32Relaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadUint32Relaxed", atomixLoad32uRelaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadInt64Relaxed", atomixLoad64Relaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadUint64Relaxed", atomixLoad64uRelaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadUintptrRelaxed", atomixLoadUintptrRelaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadPointerRelaxed", atomixLoadPointerRelaxed, sys.AMD64, sys.ARM64)
+
+	// Load operations - Acquire (LDAR on ARM64, same as regular atomic load on x86-64 TSO)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadInt32Acquire", atomixLoad32Acquire, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadUint32Acquire", atomixLoad32uAcquire, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadInt64Acquire", atomixLoad64Acquire, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadUint64Acquire", atomixLoad64uAcquire, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadUintptrAcquire", atomixLoadUintptrAcquire, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "LoadPointerAcquire", atomixLoadPointerAcquire, sys.AMD64, sys.ARM64)
+
+	// Helper for atomix Store intrinsics (Release semantics - STLR on ARM64, MOV on x86 TSO)
+	atomixStore32Release := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStoreRel32, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+	atomixStore64Release := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStoreRel64, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+	atomixStoreUintptrRelease := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStoreRel64, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+	atomixStorePointerRelease := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStorePtrNoWB, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+
+	// Helper for atomix Store intrinsics (Relaxed semantics - plain MOV on ARM64 and x86)
+	atomixStore32Relaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStore32Relaxed, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+	atomixStore64Relaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStore64Relaxed, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+	atomixStoreUintptrRelaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStore64Relaxed, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+	atomixStorePointerRelaxed := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue3(ssa.OpAtomicStorePtrRelaxedNoWB, types.TypeMem, args[0], args[1], s.mem())
+		return nil
+	}
+
+	// Store operations - Relaxed (plain MOV on ARM64 and x86, no release semantics)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreInt32Relaxed", atomixStore32Relaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreUint32Relaxed", atomixStore32Relaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreInt64Relaxed", atomixStore64Relaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreUint64Relaxed", atomixStore64Relaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreUintptrRelaxed", atomixStoreUintptrRelaxed, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StorePointerRelaxed", atomixStorePointerRelaxed, sys.AMD64, sys.ARM64)
+
+	// Store operations - Release (STLR on ARM64, MOV on x86 TSO)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreInt32Release", atomixStore32Release, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreUint32Release", atomixStore32Release, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreInt64Release", atomixStore64Release, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreUint64Release", atomixStore64Release, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StoreUintptrRelease", atomixStoreUintptrRelease, sys.AMD64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "StorePointerRelease", atomixStorePointerRelease, sys.AMD64, sys.ARM64)
+
+	// Memory barrier intrinsics
+	// AMD64: TSO provides acquire/release automatically, only AcqRel needs MFENCE
+	atomixBarrierNoOp := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		return nil
+	}
+	atomixBarrierMFENCE := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue1(ssa.OpAMD64MFENCE, types.TypeMem, s.mem())
+		return nil
+	}
+	// ARM64: DMB with different options (0x9=ISHLD, 0xA=ISHST, 0xB=ISH)
+	atomixBarrierAcquireARM64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue1I(ssa.OpARM64DMB, types.TypeMem, 0x9, s.mem())
+		return nil
+	}
+	atomixBarrierReleaseARM64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue1I(ssa.OpARM64DMB, types.TypeMem, 0xA, s.mem())
+		return nil
+	}
+	atomixBarrierAcqRelARM64 := func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+		s.vars[memVar] = s.newValue1I(ssa.OpARM64DMB, types.TypeMem, 0xB, s.mem())
+		return nil
+	}
+	// Barrier operations - AMD64 (TSO: acquire/release are no-ops)
+	addF("code.hybscloud.com/atomix/internal/arch", "BarrierAcquire", atomixBarrierNoOp, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "BarrierRelease", atomixBarrierNoOp, sys.AMD64)
+	addF("code.hybscloud.com/atomix/internal/arch", "BarrierAcqRel", atomixBarrierMFENCE, sys.AMD64)
+	// Barrier operations - ARM64 (DMB with appropriate options)
+	addF("code.hybscloud.com/atomix/internal/arch", "BarrierAcquire", atomixBarrierAcquireARM64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "BarrierRelease", atomixBarrierReleaseARM64, sys.ARM64)
+	addF("code.hybscloud.com/atomix/internal/arch", "BarrierAcqRel", atomixBarrierAcqRelARM64, sys.ARM64)
 
 	/******** math/big ********/
 	alias("math/big", "mulWW", "math/bits", "Mul64", p8...)
