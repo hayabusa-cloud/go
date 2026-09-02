@@ -220,8 +220,12 @@ func rewriteValueAMD64(v *Value) bool {
 		return rewriteValueAMD64_OpAMD64CMPWload(v)
 	case OpAMD64CMPXCHGLlock:
 		return rewriteValueAMD64_OpAMD64CMPXCHGLlock(v)
+	case OpAMD64CMPXCHGLlockValue:
+		return rewriteValueAMD64_OpAMD64CMPXCHGLlockValue(v)
 	case OpAMD64CMPXCHGQlock:
 		return rewriteValueAMD64_OpAMD64CMPXCHGQlock(v)
+	case OpAMD64CMPXCHGQlockValue:
+		return rewriteValueAMD64_OpAMD64CMPXCHGQlockValue(v)
 	case OpAMD64DIVSD:
 		return rewriteValueAMD64_OpAMD64DIVSD(v)
 	case OpAMD64DIVSDload:
@@ -272,6 +276,8 @@ func rewriteValueAMD64(v *Value) bool {
 		return rewriteValueAMD64_OpAMD64LoweredPanicBoundsRC(v)
 	case OpAMD64LoweredPanicBoundsRR:
 		return rewriteValueAMD64_OpAMD64LoweredPanicBoundsRR(v)
+	case OpAMD64MFENCE:
+		return rewriteValueAMD64_OpAMD64MFENCE(v)
 	case OpAMD64MOVBELstore:
 		return rewriteValueAMD64_OpAMD64MOVBELstore(v)
 	case OpAMD64MOVBEQstore:
@@ -2392,6 +2398,10 @@ func rewriteValueAMD64(v *Value) bool {
 		return rewriteValueAMD64_OpAtomicAnd64value(v)
 	case OpAtomicAnd8:
 		return rewriteValueAMD64_OpAtomicAnd8(v)
+	case OpAtomicCompareAndExchange32:
+		return rewriteValueAMD64_OpAtomicCompareAndExchange32(v)
+	case OpAtomicCompareAndExchange64:
+		return rewriteValueAMD64_OpAtomicCompareAndExchange64(v)
 	case OpAtomicCompareAndSwap32:
 		return rewriteValueAMD64_OpAtomicCompareAndSwap32(v)
 	case OpAtomicCompareAndSwap64:
@@ -2404,12 +2414,20 @@ func rewriteValueAMD64(v *Value) bool {
 		return rewriteValueAMD64_OpAtomicExchange8(v)
 	case OpAtomicLoad32:
 		return rewriteValueAMD64_OpAtomicLoad32(v)
+	case OpAtomicLoad32Relaxed:
+		return rewriteValueAMD64_OpAtomicLoad32Relaxed(v)
 	case OpAtomicLoad64:
 		return rewriteValueAMD64_OpAtomicLoad64(v)
+	case OpAtomicLoad64Relaxed:
+		return rewriteValueAMD64_OpAtomicLoad64Relaxed(v)
 	case OpAtomicLoad8:
 		return rewriteValueAMD64_OpAtomicLoad8(v)
+	case OpAtomicLoad8Relaxed:
+		return rewriteValueAMD64_OpAtomicLoad8Relaxed(v)
 	case OpAtomicLoadPtr:
 		return rewriteValueAMD64_OpAtomicLoadPtr(v)
+	case OpAtomicLoadPtrRelaxed:
+		return rewriteValueAMD64_OpAtomicLoadPtrRelaxed(v)
 	case OpAtomicOr32:
 		return rewriteValueAMD64_OpAtomicOr32(v)
 	case OpAtomicOr32value:
@@ -2420,12 +2438,28 @@ func rewriteValueAMD64(v *Value) bool {
 		return rewriteValueAMD64_OpAtomicOr8(v)
 	case OpAtomicStore32:
 		return rewriteValueAMD64_OpAtomicStore32(v)
+	case OpAtomicStore32Relaxed:
+		return rewriteValueAMD64_OpAtomicStore32Relaxed(v)
 	case OpAtomicStore64:
 		return rewriteValueAMD64_OpAtomicStore64(v)
+	case OpAtomicStore64Relaxed:
+		return rewriteValueAMD64_OpAtomicStore64Relaxed(v)
 	case OpAtomicStore8:
 		return rewriteValueAMD64_OpAtomicStore8(v)
+	case OpAtomicStore8Relaxed:
+		return rewriteValueAMD64_OpAtomicStore8Relaxed(v)
 	case OpAtomicStorePtrNoWB:
 		return rewriteValueAMD64_OpAtomicStorePtrNoWB(v)
+	case OpAtomicStorePtrRelaxedNoWB:
+		return rewriteValueAMD64_OpAtomicStorePtrRelaxedNoWB(v)
+	case OpAtomicStoreRel32:
+		return rewriteValueAMD64_OpAtomicStoreRel32(v)
+	case OpAtomicStoreRel64:
+		return rewriteValueAMD64_OpAtomicStoreRel64(v)
+	case OpAtomicXor32value:
+		return rewriteValueAMD64_OpAtomicXor32value(v)
+	case OpAtomicXor64value:
+		return rewriteValueAMD64_OpAtomicXor64value(v)
 	case OpAverageUint16x16:
 		v.Op = OpAMD64VPAVGW256
 		return true
@@ -13431,6 +13465,36 @@ func rewriteValueAMD64_OpAMD64CMPXCHGLlock(v *Value) bool {
 	}
 	return false
 }
+func rewriteValueAMD64_OpAMD64CMPXCHGLlockValue(v *Value) bool {
+	v_3 := v.Args[3]
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (CMPXCHGLlockValue [off1] {sym} (ADDQconst [off2] ptr) old new_ mem)
+	// cond: is32Bit(int64(off1)+int64(off2))
+	// result: (CMPXCHGLlockValue [off1+off2] {sym} ptr old new_ mem)
+	for {
+		off1 := auxIntToInt32(v.AuxInt)
+		sym := auxToSym(v.Aux)
+		if v_0.Op != OpAMD64ADDQconst {
+			break
+		}
+		off2 := auxIntToInt32(v_0.AuxInt)
+		ptr := v_0.Args[0]
+		old := v_1
+		new_ := v_2
+		mem := v_3
+		if !(is32Bit(int64(off1) + int64(off2))) {
+			break
+		}
+		v.reset(OpAMD64CMPXCHGLlockValue)
+		v.AuxInt = int32ToAuxInt(off1 + off2)
+		v.Aux = symToAux(sym)
+		v.AddArg4(ptr, old, new_, mem)
+		return true
+	}
+	return false
+}
 func rewriteValueAMD64_OpAMD64CMPXCHGQlock(v *Value) bool {
 	v_3 := v.Args[3]
 	v_2 := v.Args[2]
@@ -13454,6 +13518,36 @@ func rewriteValueAMD64_OpAMD64CMPXCHGQlock(v *Value) bool {
 			break
 		}
 		v.reset(OpAMD64CMPXCHGQlock)
+		v.AuxInt = int32ToAuxInt(off1 + off2)
+		v.Aux = symToAux(sym)
+		v.AddArg4(ptr, old, new_, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueAMD64_OpAMD64CMPXCHGQlockValue(v *Value) bool {
+	v_3 := v.Args[3]
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (CMPXCHGQlockValue [off1] {sym} (ADDQconst [off2] ptr) old new_ mem)
+	// cond: is32Bit(int64(off1)+int64(off2))
+	// result: (CMPXCHGQlockValue [off1+off2] {sym} ptr old new_ mem)
+	for {
+		off1 := auxIntToInt32(v.AuxInt)
+		sym := auxToSym(v.Aux)
+		if v_0.Op != OpAMD64ADDQconst {
+			break
+		}
+		off2 := auxIntToInt32(v_0.AuxInt)
+		ptr := v_0.Args[0]
+		old := v_1
+		new_ := v_2
+		mem := v_3
+		if !(is32Bit(int64(off1) + int64(off2))) {
+			break
+		}
+		v.reset(OpAMD64CMPXCHGQlockValue)
 		v.AuxInt = int32ToAuxInt(off1 + off2)
 		v.Aux = symToAux(sym)
 		v.AddArg4(ptr, old, new_, mem)
@@ -15023,6 +15117,21 @@ func rewriteValueAMD64_OpAMD64LoweredPanicBoundsRR(v *Value) bool {
 		v.AuxInt = int64ToAuxInt(kind)
 		v.Aux = panicBoundsCToAux(PanicBoundsC{C: c})
 		v.AddArg2(y, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueAMD64_OpAMD64MFENCE(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (MFENCE (MFENCE mem))
+	// result: (MFENCE mem)
+	for {
+		if v_0.Op != OpAMD64MFENCE {
+			break
+		}
+		mem := v_0.Args[0]
+		v.reset(OpAMD64MFENCE)
+		v.AddArg(mem)
 		return true
 	}
 	return false
@@ -65602,6 +65711,40 @@ func rewriteValueAMD64_OpAtomicAnd8(v *Value) bool {
 		return true
 	}
 }
+func rewriteValueAMD64_OpAtomicCompareAndExchange32(v *Value) bool {
+	v_3 := v.Args[3]
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicCompareAndExchange32 ptr old new_ mem)
+	// result: (CMPXCHGLlockValue ptr old new_ mem)
+	for {
+		ptr := v_0
+		old := v_1
+		new_ := v_2
+		mem := v_3
+		v.reset(OpAMD64CMPXCHGLlockValue)
+		v.AddArg4(ptr, old, new_, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicCompareAndExchange64(v *Value) bool {
+	v_3 := v.Args[3]
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicCompareAndExchange64 ptr old new_ mem)
+	// result: (CMPXCHGQlockValue ptr old new_ mem)
+	for {
+		ptr := v_0
+		old := v_1
+		new_ := v_2
+		mem := v_3
+		v.reset(OpAMD64CMPXCHGQlockValue)
+		v.AddArg4(ptr, old, new_, mem)
+		return true
+	}
+}
 func rewriteValueAMD64_OpAtomicCompareAndSwap32(v *Value) bool {
 	v_3 := v.Args[3]
 	v_2 := v.Args[2]
@@ -65694,10 +65837,36 @@ func rewriteValueAMD64_OpAtomicLoad32(v *Value) bool {
 		return true
 	}
 }
+func rewriteValueAMD64_OpAtomicLoad32Relaxed(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicLoad32Relaxed ptr mem)
+	// result: (MOVLatomicload ptr mem)
+	for {
+		ptr := v_0
+		mem := v_1
+		v.reset(OpAMD64MOVLatomicload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+}
 func rewriteValueAMD64_OpAtomicLoad64(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (AtomicLoad64 ptr mem)
+	// result: (MOVQatomicload ptr mem)
+	for {
+		ptr := v_0
+		mem := v_1
+		v.reset(OpAMD64MOVQatomicload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicLoad64Relaxed(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicLoad64Relaxed ptr mem)
 	// result: (MOVQatomicload ptr mem)
 	for {
 		ptr := v_0
@@ -65720,10 +65889,36 @@ func rewriteValueAMD64_OpAtomicLoad8(v *Value) bool {
 		return true
 	}
 }
+func rewriteValueAMD64_OpAtomicLoad8Relaxed(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicLoad8Relaxed ptr mem)
+	// result: (MOVBatomicload ptr mem)
+	for {
+		ptr := v_0
+		mem := v_1
+		v.reset(OpAMD64MOVBatomicload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+}
 func rewriteValueAMD64_OpAtomicLoadPtr(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (AtomicLoadPtr ptr mem)
+	// result: (MOVQatomicload ptr mem)
+	for {
+		ptr := v_0
+		mem := v_1
+		v.reset(OpAMD64MOVQatomicload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicLoadPtrRelaxed(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicLoadPtrRelaxed ptr mem)
 	// result: (MOVQatomicload ptr mem)
 	for {
 		ptr := v_0
@@ -65812,6 +66007,21 @@ func rewriteValueAMD64_OpAtomicStore32(v *Value) bool {
 		return true
 	}
 }
+func rewriteValueAMD64_OpAtomicStore32Relaxed(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStore32Relaxed ptr val mem)
+	// result: (MOVLstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVLstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
 func rewriteValueAMD64_OpAtomicStore64(v *Value) bool {
 	v_2 := v.Args[2]
 	v_1 := v.Args[1]
@@ -65828,6 +66038,21 @@ func rewriteValueAMD64_OpAtomicStore64(v *Value) bool {
 		v0 := b.NewValue0(v.Pos, OpAMD64XCHGQ, types.NewTuple(typ.UInt64, types.TypeMem))
 		v0.AddArg3(val, ptr, mem)
 		v.AddArg(v0)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicStore64Relaxed(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStore64Relaxed ptr val mem)
+	// result: (MOVQstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVQstore)
+		v.AddArg3(ptr, val, mem)
 		return true
 	}
 }
@@ -65850,6 +66075,21 @@ func rewriteValueAMD64_OpAtomicStore8(v *Value) bool {
 		return true
 	}
 }
+func rewriteValueAMD64_OpAtomicStore8Relaxed(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStore8Relaxed ptr val mem)
+	// result: (MOVBstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVBstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
 func rewriteValueAMD64_OpAtomicStorePtrNoWB(v *Value) bool {
 	v_2 := v.Args[2]
 	v_1 := v.Args[1]
@@ -65866,6 +66106,81 @@ func rewriteValueAMD64_OpAtomicStorePtrNoWB(v *Value) bool {
 		v0 := b.NewValue0(v.Pos, OpAMD64XCHGQ, types.NewTuple(typ.BytePtr, types.TypeMem))
 		v0.AddArg3(val, ptr, mem)
 		v.AddArg(v0)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicStorePtrRelaxedNoWB(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStorePtrRelaxedNoWB ptr val mem)
+	// result: (MOVQstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVQstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicStoreRel32(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStoreRel32 ptr val mem)
+	// result: (MOVLstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVLstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicStoreRel64(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStoreRel64 ptr val mem)
+	// result: (MOVQstore ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64MOVQstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicXor32value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicXor32value ptr val mem)
+	// result: (LoweredAtomicXor32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64LoweredAtomicXor32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+}
+func rewriteValueAMD64_OpAtomicXor64value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicXor64value ptr val mem)
+	// result: (LoweredAtomicXor64 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		v.reset(OpAMD64LoweredAtomicXor64)
+		v.AddArg3(ptr, val, mem)
 		return true
 	}
 }
@@ -75500,6 +75815,42 @@ func rewriteValueAMD64_OpSelect1(v *Value) bool {
 			break
 		}
 		v.reset(OpAMD64ORLlock)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (Select1 a:(LoweredAtomicXor64 ptr val mem))
+	// cond: a.Uses == 1 && clobber(a)
+	// result: (XORQlock ptr val mem)
+	for {
+		a := v_0
+		if a.Op != OpAMD64LoweredAtomicXor64 {
+			break
+		}
+		mem := a.Args[2]
+		ptr := a.Args[0]
+		val := a.Args[1]
+		if !(a.Uses == 1 && clobber(a)) {
+			break
+		}
+		v.reset(OpAMD64XORQlock)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (Select1 a:(LoweredAtomicXor32 ptr val mem))
+	// cond: a.Uses == 1 && clobber(a)
+	// result: (XORLlock ptr val mem)
+	for {
+		a := v_0
+		if a.Op != OpAMD64LoweredAtomicXor32 {
+			break
+		}
+		mem := a.Args[2]
+		ptr := a.Args[0]
+		val := a.Args[1]
+		if !(a.Uses == 1 && clobber(a)) {
+			break
+		}
+		v.reset(OpAMD64XORLlock)
 		v.AddArg3(ptr, val, mem)
 		return true
 	}

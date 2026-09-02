@@ -736,6 +736,20 @@ func init() {
 		{name: "LoweredAtomicCas64Variant", argLength: 4, reg: gpcas, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
 		{name: "LoweredAtomicCas32Variant", argLength: 4, reg: gpcas, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
 
+		// atomic compare and exchange (returns old value).
+		// LDAXR	(Rarg0), Rout
+		// CMP		Rarg1, Rout
+		// BNE		3(PC)
+		// STLXR	Rarg2, (Rarg0), Rtmp
+		// CBNZ		Rtmp, -4(PC)
+		{name: "LoweredAtomicCax64", argLength: 4, reg: gpcas, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
+		{name: "LoweredAtomicCax32", argLength: 4, reg: gpcas, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
+
+		// atomic compare and exchange variant (using LSE CASAL).
+		// CASALW Rarg1, Rarg2, (Rarg0) - Rarg1 holds old value after operation
+		{name: "LoweredAtomicCax64Variant", argLength: 4, reg: gpcas, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
+		{name: "LoweredAtomicCax32Variant", argLength: 4, reg: gpcas, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
+
 		// atomic and/or.
 		// *arg0 &= (|=) arg1. arg2=mem. returns <old content of *arg0, memory>. auxint must be zero.
 		// LDAXR	(Rarg0), Rout
@@ -748,6 +762,9 @@ func init() {
 		{name: "LoweredAtomicOr64", argLength: 3, reg: gpxchg, resultNotInArgs: true, asm: "ORR", faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true, needIntTemp: true},
 		{name: "LoweredAtomicAnd32", argLength: 3, reg: gpxchg, resultNotInArgs: true, asm: "AND", faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true, needIntTemp: true},
 		{name: "LoweredAtomicOr32", argLength: 3, reg: gpxchg, resultNotInArgs: true, asm: "ORR", faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true, needIntTemp: true},
+		{name: "LoweredAtomicXor8", argLength: 3, reg: gpxchg, resultNotInArgs: true, asm: "EOR", faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true, needIntTemp: true},
+		{name: "LoweredAtomicXor64", argLength: 3, reg: gpxchg, resultNotInArgs: true, asm: "EOR", faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true, needIntTemp: true},
+		{name: "LoweredAtomicXor32", argLength: 3, reg: gpxchg, resultNotInArgs: true, asm: "EOR", faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true, needIntTemp: true},
 
 		// atomic and/or variant.
 		// *arg0 &= (|=) arg1. arg2=mem. returns <old content of *arg0, memory>. auxint must be zero.
@@ -762,6 +779,21 @@ func init() {
 		{name: "LoweredAtomicOr64Variant", argLength: 3, reg: gpxchg, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true},
 		{name: "LoweredAtomicAnd32Variant", argLength: 3, reg: gpxchg, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
 		{name: "LoweredAtomicOr32Variant", argLength: 3, reg: gpxchg, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true},
+		{name: "LoweredAtomicXor8Variant", argLength: 3, reg: gpxchg, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true},
+		{name: "LoweredAtomicXor64Variant", argLength: 3, reg: gpxchg, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true},
+		{name: "LoweredAtomicXor32Variant", argLength: 3, reg: gpxchg, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true},
+
+		// Relaxed atomic loads (no acquire semantics).
+		// Uses plain MOV instead of LDAR for better performance when ordering is not needed.
+		{name: "LoweredAtomicLoad8Relaxed", argLength: 2, reg: gpload, asm: "MOVBU", faultOnNilArg0: true},
+		{name: "LoweredAtomicLoad32Relaxed", argLength: 2, reg: gpload, asm: "MOVWU", faultOnNilArg0: true},
+		{name: "LoweredAtomicLoad64Relaxed", argLength: 2, reg: gpload, asm: "MOVD", faultOnNilArg0: true},
+
+		// Relaxed atomic stores (no release semantics).
+		// Uses plain MOV instead of STLR for better performance when ordering is not needed.
+		{name: "LoweredAtomicStore8Relaxed", argLength: 3, reg: gpstore, asm: "MOVB", typ: "Mem", faultOnNilArg0: true, hasSideEffects: true},
+		{name: "LoweredAtomicStore32Relaxed", argLength: 3, reg: gpstore, asm: "MOVW", typ: "Mem", faultOnNilArg0: true, hasSideEffects: true},
+		{name: "LoweredAtomicStore64Relaxed", argLength: 3, reg: gpstore, asm: "MOVD", typ: "Mem", faultOnNilArg0: true, hasSideEffects: true},
 
 		// LoweredWB invokes runtime.gcWriteBarrier. arg0=mem, auxint=# of buffer entries needed
 		// It saves all GP registers if necessary,
