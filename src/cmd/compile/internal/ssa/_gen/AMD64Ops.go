@@ -190,6 +190,7 @@ func init() {
 		gpstoreconstidx = regInfo{inputs: []regMask{gpspsbg, gpsp, 0}}
 		gpstorexchg     = regInfo{inputs: []regMask{gp, gpspsbg, 0}, outputs: []regMask{gp}}
 		cmpxchg         = regInfo{inputs: []regMask{gp, ax, gp, 0}, outputs: []regMask{gp, 0}, clobbers: ax}
+		cmpxchgValue    = regInfo{inputs: []regMask{gp, ax, gp, 0}, outputs: []regMask{ax, 0}} // Returns old value in AX
 		atomicLogic     = regInfo{inputs: []regMask{gp &^ ax, gp &^ ax, 0}, outputs: []regMask{ax, 0}}
 
 		fp01        = regInfo{inputs: nil, outputs: fponly}
@@ -1129,6 +1130,9 @@ func init() {
 
 		{name: "LoweredHasCPUFeature", argLength: 0, reg: gp01, rematerializeable: true, typ: "UInt64", aux: "Sym", symEffect: "None"},
 
+		// Memory fence for sequential consistency
+		{name: "MFENCE", argLength: 1, asm: "MFENCE", hasSideEffects: true}, // arg0=mem, returns void
+
 		// LoweredPanicBoundsRR takes x and y, two values that caused a bounds check to fail.
 		// the RC and CR versions are used when one of the arguments is a constant. CC is used
 		// when both are constant (normally both 0, as prove derives the fact that a [0] bounds
@@ -1198,6 +1202,10 @@ func init() {
 		{name: "CMPXCHGLlock", argLength: 4, reg: cmpxchg, asm: "CMPXCHGL", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"},
 		{name: "CMPXCHGQlock", argLength: 4, reg: cmpxchg, asm: "CMPXCHGQ", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"},
 
+		// Atomic compare-and-exchange returning old value (for atomix CAX operations).
+		{name: "CMPXCHGLlockValue", argLength: 4, reg: cmpxchgValue, asm: "CMPXCHGL", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"}, // Returns old value in AX
+		{name: "CMPXCHGQlockValue", argLength: 4, reg: cmpxchgValue, asm: "CMPXCHGQ", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"}, // Returns old value in AX
+
 		// Atomic memory updates using logical operations.
 		// Old style that just returns the memory state.
 		{name: "ANDBlock", argLength: 3, reg: gpstore, asm: "ANDB", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"}, // *(arg0+auxint+aux) &= arg1
@@ -1206,6 +1214,8 @@ func init() {
 		{name: "ORBlock", argLength: 3, reg: gpstore, asm: "ORB", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"},   // *(arg0+auxint+aux) |= arg1
 		{name: "ORLlock", argLength: 3, reg: gpstore, asm: "ORL", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"},   // *(arg0+auxint+aux) |= arg1
 		{name: "ORQlock", argLength: 3, reg: gpstore, asm: "ORQ", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"},   // *(arg0+auxint+aux) |= arg1
+		{name: "XORLlock", argLength: 3, reg: gpstore, asm: "XORL", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"}, // *(arg0+auxint+aux) ^= arg1
+		{name: "XORQlock", argLength: 3, reg: gpstore, asm: "XORQ", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr"}, // *(arg0+auxint+aux) ^= arg1
 
 		// Atomic memory updates using logical operations.
 		// *(arg0+auxint+aux) op= arg1. arg2=mem.
@@ -1214,6 +1224,8 @@ func init() {
 		{name: "LoweredAtomicAnd32", argLength: 3, reg: atomicLogic, resultNotInArgs: true, asm: "ANDL", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr", unsafePoint: true, needIntTemp: true},
 		{name: "LoweredAtomicOr64", argLength: 3, reg: atomicLogic, resultNotInArgs: true, asm: "ORQ", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr", unsafePoint: true, needIntTemp: true},
 		{name: "LoweredAtomicOr32", argLength: 3, reg: atomicLogic, resultNotInArgs: true, asm: "ORL", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr", unsafePoint: true, needIntTemp: true},
+		{name: "LoweredAtomicXor64", argLength: 3, reg: atomicLogic, resultNotInArgs: true, asm: "XORQ", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr", unsafePoint: true, needIntTemp: true},
+		{name: "LoweredAtomicXor32", argLength: 3, reg: atomicLogic, resultNotInArgs: true, asm: "XORL", aux: "SymOff", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, symEffect: "RdWr", unsafePoint: true, needIntTemp: true},
 
 		// Prefetch instructions
 		// Do prefetch arg0 address. arg0=addr, arg1=memory. Instruction variant selects locality hint

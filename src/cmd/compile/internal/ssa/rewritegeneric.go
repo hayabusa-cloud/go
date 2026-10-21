@@ -38,6 +38,46 @@ func rewriteValuegeneric(v *Value) bool {
 		return rewriteValuegeneric_OpAndB(v)
 	case OpArraySelect:
 		return rewriteValuegeneric_OpArraySelect(v)
+	case OpAtomicAdd32:
+		return rewriteValuegeneric_OpAtomicAdd32(v)
+	case OpAtomicAdd32Variant:
+		return rewriteValuegeneric_OpAtomicAdd32Variant(v)
+	case OpAtomicAdd64:
+		return rewriteValuegeneric_OpAtomicAdd64(v)
+	case OpAtomicAdd64Variant:
+		return rewriteValuegeneric_OpAtomicAdd64Variant(v)
+	case OpAtomicAnd32value:
+		return rewriteValuegeneric_OpAtomicAnd32value(v)
+	case OpAtomicAnd32valueVariant:
+		return rewriteValuegeneric_OpAtomicAnd32valueVariant(v)
+	case OpAtomicAnd64value:
+		return rewriteValuegeneric_OpAtomicAnd64value(v)
+	case OpAtomicAnd64valueVariant:
+		return rewriteValuegeneric_OpAtomicAnd64valueVariant(v)
+	case OpAtomicAnd8value:
+		return rewriteValuegeneric_OpAtomicAnd8value(v)
+	case OpAtomicAnd8valueVariant:
+		return rewriteValuegeneric_OpAtomicAnd8valueVariant(v)
+	case OpAtomicOr32value:
+		return rewriteValuegeneric_OpAtomicOr32value(v)
+	case OpAtomicOr32valueVariant:
+		return rewriteValuegeneric_OpAtomicOr32valueVariant(v)
+	case OpAtomicOr64value:
+		return rewriteValuegeneric_OpAtomicOr64value(v)
+	case OpAtomicOr64valueVariant:
+		return rewriteValuegeneric_OpAtomicOr64valueVariant(v)
+	case OpAtomicOr8value:
+		return rewriteValuegeneric_OpAtomicOr8value(v)
+	case OpAtomicOr8valueVariant:
+		return rewriteValuegeneric_OpAtomicOr8valueVariant(v)
+	case OpAtomicXor32value:
+		return rewriteValuegeneric_OpAtomicXor32value(v)
+	case OpAtomicXor32valueVariant:
+		return rewriteValuegeneric_OpAtomicXor32valueVariant(v)
+	case OpAtomicXor64value:
+		return rewriteValuegeneric_OpAtomicXor64value(v)
+	case OpAtomicXor64valueVariant:
+		return rewriteValuegeneric_OpAtomicXor64valueVariant(v)
 	case OpBitLen16:
 		return rewriteValuegeneric_OpBitLen16(v)
 	case OpBitLen32:
@@ -5533,6 +5573,366 @@ func rewriteValuegeneric_OpArraySelect(v *Value) bool {
 		x := v_0.Args[0]
 		v.reset(OpIData)
 		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAdd32(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAdd32 ptr (Const32 [0]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAdd32Variant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAdd32Variant ptr (Const32 [0]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAdd64(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAdd64 ptr (Const64 [0]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAdd64Variant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAdd64Variant ptr (Const64 [0]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAnd32value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAnd32value ptr (Const32 [-1]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != -1 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAnd32valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAnd32valueVariant ptr (Const32 [-1]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != -1 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAnd64value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAnd64value ptr (Const64 [-1]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != -1 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAnd64valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAnd64valueVariant ptr (Const64 [-1]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != -1 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAnd8value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAnd8value ptr (Const8 [-1]) mem)
+	// result: (AtomicLoad8 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst8 || auxIntToInt8(v_1.AuxInt) != -1 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad8)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicAnd8valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicAnd8valueVariant ptr (Const8 [-1]) mem)
+	// result: (AtomicLoad8 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst8 || auxIntToInt8(v_1.AuxInt) != -1 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad8)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicOr32value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicOr32value ptr (Const32 [0]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicOr32valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicOr32valueVariant ptr (Const32 [0]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicOr64value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicOr64value ptr (Const64 [0]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicOr64valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicOr64valueVariant ptr (Const64 [0]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicOr8value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicOr8value ptr (Const8 [0]) mem)
+	// result: (AtomicLoad8 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst8 || auxIntToInt8(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad8)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicOr8valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicOr8valueVariant ptr (Const8 [0]) mem)
+	// result: (AtomicLoad8 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst8 || auxIntToInt8(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad8)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicXor32value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicXor32value ptr (Const32 [0]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicXor32valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicXor32valueVariant ptr (Const32 [0]) mem)
+	// result: (AtomicLoad32 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst32 || auxIntToInt32(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad32)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicXor64value(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicXor64value ptr (Const64 [0]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuegeneric_OpAtomicXor64valueVariant(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicXor64valueVariant ptr (Const64 [0]) mem)
+	// result: (AtomicLoad64 ptr mem)
+	for {
+		ptr := v_0
+		if v_1.Op != OpConst64 || auxIntToInt64(v_1.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpAtomicLoad64)
+		v.AddArg2(ptr, mem)
 		return true
 	}
 	return false
