@@ -1,0 +1,283 @@
+name: Watch upstream Go releases
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if release exists'
+        type: boolean
+        default: false
+
+jobs:
+  validate-dispatch-ref:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ensure manual runs use atomix
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ "${{ github.ref_name }}" != "atomix" ]; then
+            echo "::error title=Invalid workflow dispatch ref::Run this workflow on 'atomix', not '${{ github.ref_name }}'."
+            exit 1
+          fi
+
+  check-upstream:
+    needs: validate-dispatch-ref
+    runs-on: ubuntu-latest
+    outputs:
+      new_versions: ${{ steps.check.outputs.new_versions }}
+      latest_version: ${{ steps.check.outputs.latest_version }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for new Go stable releases
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fetch latest stable Go versions from official API
+          RELEASES=$(curl -s 'https://go.dev/dl/?mode=json' | jq -r '
+            [.[] | select(.stable == true) | .version | ltrimstr("go") | select(startswith("1.25.") or startswith("1.26.") or startswith("1.27."))]
+            | sort_by(split(".") | map(tonumber))
+            | reverse
+            | .[0:5]
+          ')
+          
+          echo "Latest stable releases: $RELEASES"
+          
+          # Get existing atomix releases
+          EXISTING=$(gh release list --json tagName -q '.[].tagName | select(endswith("-atomix"))' 2>/dev/null || echo "")
+          echo "Existing atomix releases: $EXISTING"
+          
+          # Find new versions that don't have atomix releases
+          NEW_VERSIONS=()
+          LATEST=""
+          
+          for VERSION in $(echo "$RELEASES" | jq -r '.[]'); do
+            TAG="go${VERSION}-atomix"
+            if [ "${{ github.event.inputs.force_rebuild }}" = "true" ] || ! echo "$EXISTING" | grep -q "^${TAG}$"; then
+              NEW_VERSIONS+=("$VERSION")
+              if [ -z "$LATEST" ]; then
+                LATEST="$VERSION"
+              fi
+            fi
+          done
+          
+          if [ ${#NEW_VERSIONS[@]} -gt 0 ]; then
+            echo "New versions to build: ${NEW_VERSIONS[*]}"
+            echo "new_versions=$(printf '%s\n' "${NEW_VERSIONS[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST" >> $GITHUB_OUTPUT
+          else
+            echo "No new versions found"
+            echo "new_versions=[]" >> $GITHUB_OUTPUT
+            echo "latest_version=" >> $GITHUB_OUTPUT
+          fi
+
+  rebase-and-build:
+    needs: check-upstream
+    if: ${{ needs.check-upstream.outputs.latest_version != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+    
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        version: ${{ fromJson(needs.check-upstream.outputs.new_versions) }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout release branch for version series
+        id: branch
+        run: |
+          VERSION="${{ matrix.version }}"
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          BRANCH="release-branch.go${MAJOR_MINOR}-atomix"
+          echo "name=${BRANCH}" >> $GITHUB_OUTPUT
+          git checkout "${BRANCH}"
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/golang/go.git || true
+          git fetch upstream --tags
+
+      - name: Apply Atomix patch onto new Go version
+        id: rebase
+        continue-on-error: true
+        run: |
+          VERSION="${{ matrix.version }}"
+          TAG="go${VERSION}"
+          
+          echo "Applying Atomix patch onto ${TAG}..."
+
+          CURRENT_TAG=$(sed -n '1p' VERSION)
+          if ! [[ "${CURRENT_TAG}" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "Failed to determine current upstream content tag from VERSION."
+            echo "Expected VERSION first line to match goX.Y.Z, got '${CURRENT_TAG}'."
+            exit 0
+          fi
+          if ! git rev-parse -q --verify "refs/tags/${CURRENT_TAG}^{commit}" >/dev/null; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "Current upstream content tag ${CURRENT_TAG} is not available locally."
+            echo "Ensure the upstream Go tags were fetched before this step."
+            exit 0
+          fi
+          if ! git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "Target upstream tag ${TAG} is not available locally."
+            echo "Ensure the upstream Go tags were fetched before this step."
+            exit 0
+          fi
+          echo "Current upstream content tag: ${CURRENT_TAG}"
+
+          PATCH_FILE=$(mktemp)
+          git diff --binary "${CURRENT_TAG}..HEAD" -- . ':(exclude).github/workflows/**' > "${PATCH_FILE}"
+
+          if [ ! -s "${PATCH_FILE}" ]; then
+            echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+            echo "No Atomix patch found above ${CURRENT_TAG}."
+            exit 0
+          fi
+
+          # Create new branch from the target upstream tag and apply the Atomix
+          # source delta by content. Release branches may contain aggregate
+          # upstream updates whose topology still points at an older Go tag, so
+          # replaying commits from a reachable tag can incorrectly replay the
+          # upstream delta itself.
+          git checkout -b "atomix-${VERSION}" "${TAG}"
+
+          if git apply --3way --index "${PATCH_FILE}"; then
+            if git diff --cached --quiet; then
+              echo "rebase_success=false" >> "$GITHUB_OUTPUT"
+              echo "Atomix patch applied without staged changes."
+              exit 0
+            fi
+            git commit -m "cmd/compile: apply atomix intrinsics to Go ${VERSION}"
+            echo "rebase_success=true" >> $GITHUB_OUTPUT
+            echo "Atomix patch applied successfully for ${VERSION}"
+          else
+            echo "rebase_success=false" >> $GITHUB_OUTPUT
+            echo "Atomix patch failed - conflicts detected"
+          fi
+
+      - name: Handle rebase failure
+        if: steps.rebase.outputs.rebase_success == 'false'
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const version = '${{ matrix.version }}';
+            const title = `Rebase conflict for Go ${version}`;
+            const body = `
+            Automated Atomix patch application onto Go ${version} failed due to merge conflicts.
+            
+            Manual intervention required:
+            1. Checkout \`release-branch.go${version.split('.').slice(0, 2).join('.')}-atomix\`
+            2. Read the current upstream content tag from \`VERSION\`
+            3. Generate the Atomix patch with: \`git diff --binary <current-tag>..HEAD -- . ':(exclude).github/workflows/**'\`
+            4. Apply that patch onto \`go${version}\`, resolve conflicts, and regenerate SSA
+            5. Restore CI workflows from \`atomix\`
+            6. Push to \`release-branch.go${version.split('.').slice(0, 2).join('.')}-atomix\`
+            
+            The CI will automatically build and release once the branch is pushed.
+            `;
+
+            try {
+              // Check if issue already exists
+              const issues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'rebase-conflict'
+              });
+
+              const existing = issues.data.find(i => i.title === title);
+              if (!existing) {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: title,
+                  body: body,
+                  labels: ['rebase-conflict', 'automation']
+                });
+              }
+            } catch (error) {
+              core.warning(`Failed to create or find rebase conflict issue for Go ${version}: ${error.message}`);
+            }
+
+      - name: Regenerate SSA
+        if: steps.rebase.outputs.rebase_success == 'true'
+        run: |
+          # Use system Go to regenerate SSA
+          cd src/cmd/compile/internal/ssa/_gen
+          GOWORK=off go run .
+
+      - name: Commit regenerated files
+        if: steps.rebase.outputs.rebase_success == 'true'
+        run: |
+          if git diff --quiet; then
+            echo "No SSA changes needed"
+          else
+            git add -A
+            git commit --amend --no-edit
+          fi
+
+      - name: Restore CI workflow files
+        if: steps.rebase.outputs.rebase_success == 'true'
+        run: |
+          git fetch origin atomix
+          git checkout origin/atomix -- .github/workflows/
+          git add .github/workflows/
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: restore atomix build workflows"
+          fi
+
+      - name: Push release branch
+        if: steps.rebase.outputs.rebase_success == 'true'
+        run: |
+          VERSION="${{ matrix.version }}"
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          BRANCH="release-branch.go${MAJOR_MINOR}-atomix"
+          
+          # Force push to the release branch (updates existing or creates new)
+          git push origin "atomix-${VERSION}:${BRANCH}" --force
+          
+          echo "Pushed to ${BRANCH}"
+
+      - name: Trigger build workflow
+        if: steps.rebase.outputs.rebase_success == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const version = '${{ matrix.version }}';
+            const majorMinor = version.split('.').slice(0, 2).join('.');
+            const branch = `release-branch.go${majorMinor}-atomix`;
+            
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml',
+              ref: branch
+            });
+            
+            console.log(`Triggered build workflow for ${branch}`);
