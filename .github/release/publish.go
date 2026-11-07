@@ -215,7 +215,7 @@ func (a *api) signedCandidate(c candidate, branch string) (string, error) {
 		}
 	}
 	input := map[string]any{
-		"branch":          map[string]string{"repositoryNameWithOwner": a.repo, "refName": branch},
+		"branch":          map[string]string{"repositoryNameWithOwner": a.repo, "branchName": branch},
 		"expectedHeadOid": c.Upstream,
 		"message":         map[string]string{"headline": "cmd/compile: apply Atomix recipe to " + c.Version},
 		"fileChanges":     map[string]any{"additions": c.Additions},

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +42,7 @@ func TestMain(m *testing.M) {
 func fixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	write(t, filepath.Join(root, ".github/release/recipe.json"), []byte(`{"base":"base","bootstrap":"1.26.10"}`))
+	write(t, filepath.Join(root, ".github/release/recipe.json"), []byte(`{"base":"base","bootstrap":"1.26.x"}`))
 	write(t, filepath.Join(root, ".github/workflows/release.yml"), []byte("name: fixture\n"))
 	return root
 }
@@ -106,8 +107,9 @@ func TestDiscoveryRolloverAndFailures(t *testing.T) {
 				return
 			}
 			var got struct {
-				Versions []string
-				Latest   string
+				Versions  []string
+				Latest    string
+				Bootstrap string
 			}
 			if err := json.Unmarshal(b, &got); err != nil {
 				t.Fatal(err)
@@ -118,7 +120,19 @@ func TestDiscoveryRolloverAndFailures(t *testing.T) {
 			if got.Latest != tc.want[0] {
 				t.Fatalf("latest=%s, want %s", got.Latest, tc.want[0])
 			}
+			if want := strings.TrimPrefix(runtime.Version(), "go"); got.Bootstrap != want {
+				t.Fatalf("bootstrap=%s, want resolved version %s", got.Bootstrap, want)
+			}
 		})
+	}
+}
+
+func TestBootstrapMismatch(t *testing.T) {
+	root := fixture(t)
+	write(t, filepath.Join(root, ".github/release/recipe.json"), []byte(`{"base":"base","bootstrap":"1.99.x"}`))
+	output, err := cli(root, "http://127.0.0.1:0", "plan")
+	if err == nil || !strings.Contains(string(output), "does not satisfy 1.99.x") {
+		t.Fatalf("wrong bootstrap must fail before discovery: %v: %s", err, output)
 	}
 }
 
@@ -181,6 +195,7 @@ func TestPublicationLifecycle(t *testing.T) {
 					Variables struct {
 						Owner, Name, Tag string
 						Input            struct {
+							Branch          map[string]string
 							ExpectedHeadOID string
 							FileChanges     struct{ Additions []any }
 						}
@@ -234,6 +249,10 @@ func TestPublicationLifecycle(t *testing.T) {
 					head = "upstream"
 					w.WriteHeader(201)
 				case r.URL.Path == "/graphql":
+					if want := map[string]string{"repositoryNameWithOwner": "test/go", "branchName": "atomix-candidate/" + tag}; !reflect.DeepEqual(body.Variables.Input.Branch, want) {
+						respond(map[string]any{"errors": []map[string]string{{"message": "branch requires repositoryNameWithOwner and branchName"}}})
+						return
+					}
 					signedCommits++
 					if body.Variables.Input.ExpectedHeadOID != "upstream" {
 						t.Error("candidate does not use pinned upstream parent")
@@ -301,7 +320,7 @@ func TestPublicationLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("plan: %v: %s", err, b)
 			}
-			var plan struct{ Recipe string }
+			var plan struct{ Recipe, Bootstrap string }
 			if err := json.Unmarshal(b, &plan); err != nil {
 				t.Fatal(err)
 			}
@@ -311,7 +330,7 @@ func TestPublicationLifecycle(t *testing.T) {
 			write(t, filepath.Join(dir, tag+".src.tar.gz"), source)
 			writeJSON(t, filepath.Join(dir, tag+".json"), map[string]string{"tree": "tested-tree"})
 			writeJSON(t, filepath.Join(dir, "candidate.json"), map[string]any{
-				"version": "go1.29.0", "tag": tag, "upstream": "upstream", "recipe": plan.Recipe, "bootstrap": "1.26.10", "tree": "tested-tree", "source_sha256": fmt.Sprintf("%x", sha256.Sum256(source)), "additions": []any{},
+				"version": "go1.29.0", "tag": tag, "upstream": "upstream", "recipe": plan.Recipe, "bootstrap": plan.Bootstrap, "tree": "tested-tree", "source_sha256": fmt.Sprintf("%x", sha256.Sum256(source)), "additions": []any{},
 			})
 			for _, p := range []string{"linux-amd64", "linux-arm64", "darwin-arm64"} {
 				binary := []byte("binary fixture " + p)

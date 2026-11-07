@@ -37,6 +37,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ steps.bootstrap.outputs.version }}
+          check-latest: true
           cache: false
       - name: Test release lifecycle
         run: go -C .github/release test -race -timeout 120s ./...

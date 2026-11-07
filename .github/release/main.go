@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -99,7 +100,7 @@ func run() error {
 	feed := f.String("feed", "https://go.dev/dl/?mode=json", "upstream release feed")
 	base := f.String("api", "https://api.github.com", "GitHub REST endpoint")
 	graph := f.String("graphql", "https://api.github.com/graphql", "GitHub GraphQL endpoint")
-	version := f.String("version", "", "upstream version, such as go1.27.3")
+	version := f.String("version", "", "resolved upstream tag (goX.Y.Z)")
 	out := f.String("out", "", "candidate or publication directory")
 	platform := f.String("platform", "", "validated target platform")
 	latest := f.Bool("latest", false, "mark the newest discovered version as the latest release")
@@ -115,7 +116,13 @@ func run() error {
 	if err := readJSON(filepath.Join(abs, ".github/release/recipe.json"), &cfg); err != nil {
 		return err
 	}
-	digest, err := recipeDigest(abs)
+	bootstrap := strings.TrimPrefix(runtime.Version(), "go")
+	series := strings.TrimPrefix(goversion.Lang(runtime.Version()), "go") + ".x"
+	if !stableVersion.MatchString(runtime.Version()) || (cfg.Bootstrap != bootstrap && cfg.Bootstrap != series) {
+		return fmt.Errorf("bootstrap Go %s does not satisfy %s", bootstrap, cfg.Bootstrap)
+	}
+	cfg.Bootstrap = bootstrap
+	digest, err := recipeDigest(abs, bootstrap)
 	if err != nil {
 		return err
 	}
@@ -157,10 +164,11 @@ func run() error {
 	}
 }
 
-// The identity covers the patch, recipe, driver, smoke checks, and workflow.
+// The identity covers the resolved bootstrap, patch, recipe, driver, checks, and workflow.
 // Tests and prose do not change the toolchain recipe.
-func recipeDigest(root string) (string, error) {
+func recipeDigest(root, bootstrap string) (string, error) {
 	h := sha256.New()
+	fmt.Fprintf(h, "bootstrap\x00%s\x00", bootstrap)
 	dir := filepath.Join(root, ".github/release")
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
