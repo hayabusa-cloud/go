@@ -190,7 +190,6 @@ func init() {
 		gpstoreconstidx = regInfo{inputs: []regMask{gpspsbg, gpsp, 0}}
 		gpstorexchg     = regInfo{inputs: []regMask{gp, gpspsbg, 0}, outputs: []regMask{gp}}
 		cmpxchg         = regInfo{inputs: []regMask{gp, ax, gp, 0}, outputs: []regMask{gp, 0}, clobbers: ax}
-		cmpxchgValue    = regInfo{inputs: []regMask{gp, ax, gp, 0}, outputs: []regMask{ax, 0}} // Returns old value in AX
 		atomicLogic     = regInfo{inputs: []regMask{gp &^ ax, gp &^ ax, 0}, outputs: []regMask{ax, 0}}
 
 		fp01        = regInfo{inputs: nil, outputs: fponly}
@@ -274,6 +273,9 @@ func init() {
 
 		prefreg = regInfo{inputs: []regMask{gpspsbg}}
 	)
+
+	var noRegister regMask
+	cmpxchgValue := regInfo{inputs: []regMask{gp, ax, gp, noRegister}, outputs: []regMask{ax, noRegister}} // Returns old value in AX.
 
 	var AMD64ops = []opData{
 		// {ADD,SUB,MUL,DIV}Sx: floating-point arithmetic

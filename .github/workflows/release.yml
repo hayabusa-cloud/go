@@ -1,0 +1,66 @@
+name: Release Atomix Go
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  push:
+    branches: [atomix]
+    paths: ['.github/release/**', '.github/workflows/release*.yml']
+  pull_request:
+    paths: ['.github/release/**', '.github/workflows/release*.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atomix-release-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      versions: ${{ steps.plan.outputs.versions }}
+      bootstrap: ${{ steps.plan.outputs.bootstrap }}
+      latest: ${{ steps.plan.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read bootstrap version
+        id: bootstrap
+        run: echo "version=$(jq -r .bootstrap .github/release/recipe.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.bootstrap.outputs.version }}
+          cache: false
+      - name: Test release lifecycle
+        run: go -C .github/release test -race -timeout 120s ./...
+      - name: Discover pending stable releases
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          go -C .github/release run . plan > "$RUNNER_TEMP/plan.json"
+          echo "versions=$(jq -c .versions "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+          echo "bootstrap=$(jq -r .bootstrap "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+          echo "latest=$(jq -r .latest "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.versions != '[]'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
+    uses: ./.github/workflows/release-version.yml
+    with:
+      version: ${{ matrix.version }}
+      bootstrap: ${{ needs.plan.outputs.bootstrap }}
+      latest: ${{ matrix.version == needs.plan.outputs.latest }}

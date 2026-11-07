@@ -1,16 +1,26 @@
-# Contributing to Go
+# Contributing to Atomix Go
+
+For Atomix compiler or release automation changes, use this repository's
+[issues](https://github.com/hayabusa-cloud/go/issues) and
+[pull requests](https://github.com/hayabusa-cloud/go/pulls).
+
+Keep compiler changes and `.github/release/atomix.patch` in sync. Follow the
+[release validation instructions](.github/release/README.md), and include the
+affected Go version, target platform, and relevant test or performance results.
+
+## Contributing to upstream Go
 
 Go is an open source project.
 
 It is the work of hundreds of contributors. We appreciate your help!
 
-## Before filing an issue
+### Before filing an issue
 
 If you are unsure whether you have found a bug, please consider asking in the [golang-nuts mailing
 list](https://groups.google.com/forum/#!forum/golang-nuts) or [other forums](https://golang.org/help/) first. If
 the behavior you are seeing is confirmed as a bug or issue, it can easily be re-raised in the issue tracker.
 
-## Filing issues
+### Filing issues
 
 Sensitive security-related issues should be reported to [security@golang.org](mailto:security@golang.org).
 See the [security policy](https://golang.org/security) for details.
@@ -26,7 +36,7 @@ Otherwise, when filing an issue, make sure to answer these five questions:
 
 For change proposals, see [Proposing Changes To Go](https://go.dev/s/proposal-process).
 
-## Contributing code
+### Contributing code
 
 Please read the [Contribution Guidelines](https://golang.org/doc/contribute.html) before sending patches.
 

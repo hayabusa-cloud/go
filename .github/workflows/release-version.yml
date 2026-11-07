@@ -1,0 +1,110 @@
+name: Release one Go version
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      bootstrap:
+        required: true
+        type: string
+      latest:
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.bootstrap }}
+          cache: false
+      - name: Prepare immutable source
+        env:
+          VERSION: ${{ inputs.version }}
+        run: go -C .github/release run . prepare -version "$VERSION" -out "$RUNNER_TEMP/candidate"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: source-${{ inputs.version }}
+          path: ${{ runner.temp }}/candidate/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - {runner: ubuntu-latest, os: linux, arch: amd64}
+          - {runner: ubuntu-24.04-arm, os: linux, arch: arm64}
+          - {runner: macos-latest, os: darwin, arch: arm64}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.bootstrap }}
+          cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: source-${{ inputs.version }}
+          path: ${{ runner.temp }}/candidate
+      - name: Build, test, and package
+        env:
+          TARGET_OS: ${{ matrix.target.os }}
+          TARGET_ARCH: ${{ matrix.target.arch }}
+        shell: bash
+        run: |
+          go -C .github/release build -o "$RUNNER_TEMP/release" .
+          bash .github/release/build.sh "$RUNNER_TEMP/candidate" "$TARGET_OS" "$TARGET_ARCH" "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ inputs.version }}-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          path: |
+            ${{ runner.temp }}/candidate/*.${{ matrix.target.os }}-${{ matrix.target.arch }}.tar.gz
+            ${{ runner.temp }}/candidate/${{ matrix.target.os }}-${{ matrix.target.arch }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/atomix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.bootstrap }}
+          cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: source-${{ inputs.version }}
+          path: ${{ runner.temp }}/candidate
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binary-${{ inputs.version }}-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/candidate
+      - name: Publish validated source and binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAKE_LATEST: ${{ inputs.latest }}
+        run: go -C .github/release run . publish -latest="$MAKE_LATEST" -out "$RUNNER_TEMP/candidate"

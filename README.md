@@ -1,4 +1,14 @@
-# The Go Programming Language
+# Atomix Go
+
+A customized Go compiler for [atomix](https://github.com/hayabusa-cloud/atomix),
+designed for concurrent systems requiring ultra-low latency. Its intrinsics
+lower supported Atomix operations directly to native instructions.
+
+- [Download Atomix Go](https://github.com/hayabusa-cloud/go/releases)
+- [Release automation and validation](.github/release/README.md)
+- [Contributing to this fork](CONTRIBUTING.md)
+
+## Upstream Go
 
 Go is an open source programming language that makes it easy to build simple,
 reliable, and efficient software.
@@ -6,7 +16,7 @@ reliable, and efficient software.
 ![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg)
 *Gopher image by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution license][cc4-by].*
 
-Our canonical Git repository is located at https://go.googlesource.com/go.
+The upstream Git repository is located at https://go.googlesource.com/go.
 There is a mirror of the repository at https://github.com/golang/go.
 
 Unless otherwise noted, the Go source files are distributed under the
