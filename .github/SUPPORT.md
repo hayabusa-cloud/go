@@ -1,7 +1,15 @@
-Unlike many projects on GitHub, the Go project does not use its bug tracker for general discussion or asking questions.
-We only use our bug tracker for tracking bugs and tracking proposals going through the [Proposal Process](https://go.dev/s/proposal-process).
+# Atomix Go support
 
-For asking questions, see:
+Report Atomix compiler or release issues in
+[this repository](https://github.com/hayabusa-cloud/go/issues).
+Include `go version`, the operating system and architecture, and a minimal
+reproducer or failing CI run.
+
+## General Go questions
+
+The upstream Go issue tracker is for bugs and
+[change proposals](https://go.dev/s/proposal-process). For general Go questions,
+use these community resources:
 
 * [The golang-nuts mailing list](https://groups.google.com/d/forum/golang-nuts)
 

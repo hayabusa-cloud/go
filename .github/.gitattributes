@@ -1,0 +1,2 @@
+# Unified diffs require a context marker before source indentation.
+release/*.patch -whitespace
