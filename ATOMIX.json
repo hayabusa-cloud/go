@@ -1,0 +1,7 @@
+{
+  "version": "go1.27.4",
+  "tag": "go1.27.4-atomix.700eece4fe3f",
+  "upstream": "7b2881024c95a11ddb86663a616340aa3a88b67f",
+  "recipe": "700eece4fe3fc3d351d491f78ebcbfbb0cad7c25c923004fb6676dd44fd21c53",
+  "bootstrap": "1.27.4"
+}
