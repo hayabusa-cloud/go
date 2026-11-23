@@ -97,7 +97,7 @@ func run() error {
 	f := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
 	root := f.String("root", "../..", "compiler repository")
 	repo := f.String("repo", os.Getenv("GITHUB_REPOSITORY"), "GitHub owner/repository")
-	feed := f.String("feed", "https://go.dev/dl/?mode=json", "upstream release feed")
+	feed := f.String("feed", "https://go.dev/dl/?mode=json&include=all", "upstream release archive")
 	base := f.String("api", "https://api.github.com", "GitHub REST endpoint")
 	graph := f.String("graphql", "https://api.github.com/graphql", "GitHub GraphQL endpoint")
 	version := f.String("version", "", "resolved upstream tag (goX.Y.Z)")
@@ -235,17 +235,25 @@ func plan(a *api, feed string, cfg recipe, digest string) error {
 	slices.SortFunc(versions, func(a, b string) int {
 		return goversion.Compare(b, a)
 	})
+	const retainedSeries = "go1.27"
 	seen := map[string]bool{}
-	pending := []string{}
+	var targets []string
 	for _, v := range versions {
 		series := v[:strings.LastIndexByte(v, '.')]
-		if seen[series] {
+		if seen[series] || (len(seen) >= 2 && series != retainedSeries) {
 			continue
 		}
-		if len(seen) == 2 {
-			break
+		if series == retainedSeries && v != "go"+cfg.Bootstrap {
+			return fmt.Errorf("release planning requires bootstrap %s, running go%s", v, cfg.Bootstrap)
 		}
 		seen[series] = true
+		targets = append(targets, v)
+	}
+	if !seen[retainedSeries] {
+		return errors.New("Go release archive contains no stable Go 1.27 patch")
+	}
+	pending := []string{}
+	for _, v := range targets {
 		tag := v + "-atomix." + digest[:12]
 		r, err := a.getRelease(tag)
 		if err != nil {
@@ -255,15 +263,12 @@ func plan(a *api, feed string, cfg recipe, digest string) error {
 			pending = append(pending, v)
 		}
 	}
-	if len(seen) == 0 {
-		return errors.New("Go feed contains no stable versions")
-	}
 	return json.NewEncoder(os.Stdout).Encode(struct {
 		Versions  []string `json:"versions"`
 		Bootstrap string   `json:"bootstrap"`
 		Recipe    string   `json:"recipe"`
 		Latest    string   `json:"latest"`
-	}{pending, cfg.Bootstrap, digest, versions[0]})
+	}{pending, cfg.Bootstrap, digest, targets[0]})
 }
 
 func requiredAssets(tag string) []string {

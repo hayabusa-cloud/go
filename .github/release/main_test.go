@@ -42,7 +42,7 @@ func TestMain(m *testing.M) {
 func fixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	write(t, filepath.Join(root, ".github/release/recipe.json"), []byte(`{"base":"base","bootstrap":"1.26.x"}`))
+	write(t, filepath.Join(root, ".github/release/recipe.json"), []byte(`{"base":"base","bootstrap":"1.27.x"}`))
 	write(t, filepath.Join(root, ".github/workflows/release.yml"), []byte("name: fixture\n"))
 	return root
 }
@@ -75,14 +75,20 @@ func cli(root, endpoint, action string, args ...string) ([]byte, error) {
 
 func TestDiscoveryRolloverAndFailures(t *testing.T) {
 	root := fixture(t)
+	bootstrap := runtime.Version()
+	stock := fmt.Sprintf(`{"version":%q,"stable":true}`, bootstrap)
 	for _, tc := range []struct {
 		name, feed string
 		status     int
 		want       []string
 		fail       bool
 	}{
-		{"rollover", `[{"version":"go1.29rc1","stable":false},{"version":"go1.29.0","stable":true},{"version":"go1.28.9","stable":true},{"version":"go1.28.10","stable":true},{"version":"go1.27.20","stable":true}]`, 404, []string{"go1.29.0", "go1.28.10"}, false},
-		{"api-error", `[{"version":"go1.29.0","stable":true}]`, 503, nil, true},
+		{"overlap", `[{"version":"go1.28rc1","stable":false},{"version":"go1.26.11","stable":true},` + stock + `]`, 404, []string{bootstrap, "go1.26.11"}, false},
+		{"rollover", `[{"version":"go1.29.0","stable":true},{"version":"go1.28.9","stable":true},{"version":"go1.28.10","stable":true},` + stock + `]`, 404, []string{"go1.29.0", "go1.28.10", bootstrap}, false},
+		{"older-retained-line", `[` + stock + `,{"version":"go1.28.10","stable":true},{"version":"go1.30.0","stable":true},{"version":"go1.29.8","stable":true},{"version":"go1.27.0","stable":true}]`, 404, []string{"go1.30.0", "go1.29.8", bootstrap}, false},
+		{"outdated-bootstrap", `[` + stock + `,{"version":"go1.27.99999","stable":true}]`, 404, nil, true},
+		{"missing-retained-line", `[{"version":"go1.29.0","stable":true},{"version":"go1.28.10","stable":true}]`, 404, nil, true},
+		{"api-error", `[` + stock + `]`, 503, nil, true},
 		{"empty-feed", `[]`, 404, nil, true},
 		{"malformed-feed", `<html>unavailable</html>`, 404, nil, true},
 	} {
@@ -151,7 +157,7 @@ func TestDraftLookupFailures(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.URL.Path == "/feed":
-					io.WriteString(w, `[{"version":"go1.29.0","stable":true}]`)
+					fmt.Fprintf(w, `[{"version":%q,"stable":true}]`, runtime.Version())
 				case strings.Contains(r.URL.Path, "/releases/tags/"):
 					w.WriteHeader(http.StatusNotFound)
 				case r.URL.Path == "/graphql":
@@ -173,6 +179,7 @@ func TestDraftLookupFailures(t *testing.T) {
 }
 
 func TestPublicationLifecycle(t *testing.T) {
+	upstream := runtime.Version()
 	for _, mode := range []string{"success", "latest", "resume-upload", "wrong-tree", "wrong-artifact"} {
 		t.Run(mode, func(t *testing.T) {
 			root := fixture(t)
@@ -206,7 +213,7 @@ func TestPublicationLifecycle(t *testing.T) {
 						t.Error(err)
 					}
 					if strings.HasPrefix(body.Query, "query ReleaseByTag") {
-						if body.Variables.Owner != "test" || body.Variables.Name != "go" || !strings.HasPrefix(body.Variables.Tag, "go1.29.0-atomix.") {
+						if body.Variables.Owner != "test" || body.Variables.Name != "go" || !strings.HasPrefix(body.Variables.Tag, upstream+"-atomix.") {
 							t.Error("draft lookup must use the requested repository and pending tag")
 						}
 						var found any
@@ -222,7 +229,7 @@ func TestPublicationLifecycle(t *testing.T) {
 				}
 				switch {
 				case r.URL.Path == "/feed":
-					io.WriteString(w, `[{"version":"go1.29.0","stable":true}]`)
+					fmt.Fprintf(w, `[{"version":%q,"stable":true}]`, upstream)
 				case strings.Contains(r.URL.Path, "/releases/tags/"):
 					if draft == nil || draft["draft"] == true {
 						w.WriteHeader(404)
@@ -324,13 +331,13 @@ func TestPublicationLifecycle(t *testing.T) {
 			if err := json.Unmarshal(b, &plan); err != nil {
 				t.Fatal(err)
 			}
-			tag = "go1.29.0-atomix." + plan.Recipe[:12]
+			tag = upstream + "-atomix." + plan.Recipe[:12]
 			dir := t.TempDir()
 			source := []byte("source archive fixture")
 			write(t, filepath.Join(dir, tag+".src.tar.gz"), source)
 			writeJSON(t, filepath.Join(dir, tag+".json"), map[string]string{"tree": "tested-tree"})
 			writeJSON(t, filepath.Join(dir, "candidate.json"), map[string]any{
-				"version": "go1.29.0", "tag": tag, "upstream": "upstream", "recipe": plan.Recipe, "bootstrap": plan.Bootstrap, "tree": "tested-tree", "source_sha256": fmt.Sprintf("%x", sha256.Sum256(source)), "additions": []any{},
+				"version": upstream, "tag": tag, "upstream": "upstream", "recipe": plan.Recipe, "bootstrap": plan.Bootstrap, "tree": "tested-tree", "source_sha256": fmt.Sprintf("%x", sha256.Sum256(source)), "additions": []any{},
 			})
 			for _, p := range []string{"linux-amd64", "linux-arm64", "darwin-arm64"} {
 				binary := []byte("binary fixture " + p)
