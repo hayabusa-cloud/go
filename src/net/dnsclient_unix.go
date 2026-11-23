@@ -366,7 +366,11 @@ type resolverConfig struct {
 var resolvConf resolverConfig
 
 func getSystemDNSConfig() *dnsConfig {
-	resolvConf.tryUpdate("/etc/resolv.conf")
+	return getSystemDNSConfigNamed("/etc/resolv.conf")
+}
+
+func getSystemDNSConfigNamed(path string) *dnsConfig {
+	resolvConf.tryUpdate(path)
 	return resolvConf.dnsConfig.Load()
 }
 
@@ -393,6 +397,16 @@ func (conf *resolverConfig) tryUpdate(name string) {
 	conf.initOnce.Do(conf.init)
 
 	dc := conf.dnsConfig.Load()
+
+	// Currently we should never have a config that does not have any
+	// available servers to query, since in such cases the servers field
+	// is set to [defaultNS], see dnsReadConfig.
+	// This assertion main purpose is for testing, such that we never set
+	// the mocked dnsConfig in such way.
+	if len(dc.servers) == 0 {
+		panic("unreachable")
+	}
+
 	if dc.noReload {
 		return
 	}
@@ -404,8 +418,19 @@ func (conf *resolverConfig) tryUpdate(name string) {
 	defer conf.releaseSema()
 
 	now := time.Now()
-	if (len(dc.servers) > 0 && conf.lastChecked.After(now.Add(-5*time.Second))) ||
-		conf.lastChecked == distantFuture {
+
+	// Only recheck the resolv.conf when:
+	// - expired (last re-check was more that 5 seconds ago)
+	// - the default nameservers are used (the last parse could not load
+	//   resolv.conf, or it did not contain any nameservers)
+	// - rechecks are not disabled (only possible in case of testing)
+	//
+	// Note: We only do one check at a time. Other concurrent requests might
+	// still use the previous (outdated) version of the configuration file.
+	expired := now.After(conf.lastChecked.Add(5 * time.Second))
+	rechecksEnabled := conf.lastChecked != distantFuture // for testing purposes
+	recheck := (expired || dc.isDefaultNS()) && rechecksEnabled
+	if !recheck {
 		return
 	}
 	conf.lastChecked = now
@@ -636,7 +661,7 @@ func (r *Resolver) goLookupIPCNAMEOrder(ctx context.Context, network, name strin
 	type result struct {
 		p      dnsmessage.Parser
 		server string
-		error
+		error  error
 	}
 
 	if conf == nil {

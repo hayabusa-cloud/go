@@ -139,9 +139,7 @@ func InitConfig() {
 	for i := 1; i < len(ir.Syms.MallocGCSmallScanNoHeader); i++ {
 		ir.Syms.MallocGCSmallScanNoHeader[i] = typecheck.LookupRuntimeFunc(fmt.Sprintf("mallocgcSmallScanNoHeaderSC%d", i))
 	}
-	for i := 1; i < len(ir.Syms.MallocGCTiny); i++ {
-		ir.Syms.MallocGCTiny[i] = typecheck.LookupRuntimeFunc(fmt.Sprintf("mallocgcTinySize%d", i))
-	}
+	ir.Syms.MallocGCTiny = typecheck.LookupRuntimeFunc("mallocgcTinySC2")
 	ir.Syms.MallocGC = typecheck.LookupRuntimeFunc("mallocgc")
 	ir.Syms.Memmove = typecheck.LookupRuntimeFunc("memmove")
 	ir.Syms.Memequal = typecheck.LookupRuntimeFunc("memequal")
@@ -170,16 +168,17 @@ func InitConfig() {
 	ir.Syms.TypeAssert = typecheck.LookupRuntimeFunc("typeAssert")
 	ir.Syms.WBZero = typecheck.LookupRuntimeFunc("wbZero")
 	ir.Syms.WBMove = typecheck.LookupRuntimeFunc("wbMove")
-	ir.Syms.X86HasAVX = typecheck.LookupRuntimeVar("x86HasAVX")               // bool
-	ir.Syms.X86HasFMA = typecheck.LookupRuntimeVar("x86HasFMA")               // bool
-	ir.Syms.X86HasPOPCNT = typecheck.LookupRuntimeVar("x86HasPOPCNT")         // bool
-	ir.Syms.X86HasSSE41 = typecheck.LookupRuntimeVar("x86HasSSE41")           // bool
-	ir.Syms.ARMHasVFPv4 = typecheck.LookupRuntimeVar("armHasVFPv4")           // bool
-	ir.Syms.ARM64HasATOMICS = typecheck.LookupRuntimeVar("arm64HasATOMICS")   // bool
-	ir.Syms.Loong64HasLAMCAS = typecheck.LookupRuntimeVar("loong64HasLAMCAS") // bool
-	ir.Syms.Loong64HasLAM_BH = typecheck.LookupRuntimeVar("loong64HasLAM_BH") // bool
-	ir.Syms.Loong64HasLSX = typecheck.LookupRuntimeVar("loong64HasLSX")       // bool
-	ir.Syms.RISCV64HasZbb = typecheck.LookupRuntimeVar("riscv64HasZbb")       // bool
+	ir.Syms.X86HasAVX = typecheck.LookupRuntimeVar("x86HasAVX")                       // bool
+	ir.Syms.X86HasFMA = typecheck.LookupRuntimeVar("x86HasFMA")                       // bool
+	ir.Syms.X86HasPOPCNT = typecheck.LookupRuntimeVar("x86HasPOPCNT")                 // bool
+	ir.Syms.X86HasSSE41 = typecheck.LookupRuntimeVar("x86HasSSE41")                   // bool
+	ir.Syms.ARMHasVFPv4 = typecheck.LookupRuntimeVar("armHasVFPv4")                   // bool
+	ir.Syms.ARM64HasATOMICS = typecheck.LookupRuntimeVar("arm64HasATOMICS")           // bool
+	ir.Syms.Loong64HasLAMCAS = typecheck.LookupRuntimeVar("loong64HasLAMCAS")         // bool
+	ir.Syms.Loong64HasLAM_BH = typecheck.LookupRuntimeVar("loong64HasLAM_BH")         // bool
+	ir.Syms.Loong64HasDBAR_HINTS = typecheck.LookupRuntimeVar("loong64HasDBAR_HINTS") // bool
+	ir.Syms.Loong64HasLSX = typecheck.LookupRuntimeVar("loong64HasLSX")               // bool
+	ir.Syms.RISCV64HasZbb = typecheck.LookupRuntimeVar("riscv64HasZbb")               // bool
 	ir.Syms.Staticuint64s = typecheck.LookupRuntimeVar("staticuint64s")
 	ir.Syms.Typedmemmove = typecheck.LookupRuntimeFunc("typedmemmove")
 	ir.Syms.Udiv = typecheck.LookupRuntimeVar("udiv")                 // asm func with special ABI
@@ -224,12 +223,11 @@ func InitTables() {
 // any ABI wrapper that is present is nosplit, hence a precise
 // stack map is not needed there (the parameters survive only long
 // enough to call the wrapped assembly function).
-// This always returns a freshly copied ABI.
 func AbiForBodylessFuncStackMap(fn *ir.Func) *abi.ABIConfig {
-	return ssaConfig.ABI0.Copy() // No idea what races will result, be safe
+	return ssaConfig.ABI0
 }
 
-// abiForFunc implements ABI policy for a function, but does not return a copy of the ABI.
+// abiForFunc implements ABI policy for a function.
 // Passing a nil function returns the default ABI based on experiment configuration.
 func abiForFunc(fn *ir.Func, abi0, abi1 *abi.ABIConfig) *abi.ABIConfig {
 	if buildcfg.Experiment.RegabiArgs {
@@ -283,6 +281,7 @@ func (s *state) emitOpenDeferInfo() {
 
 	x := base.Ctxt.Lookup(s.curfn.LSym.Name + ".opendefer")
 	x.Set(obj.AttrContentAddressable, true)
+	x.Align = 1
 	s.curfn.LSym.Func().OpenCodedDeferInfo = x
 
 	off := 0
@@ -340,9 +339,9 @@ func buildssa(fn *ir.Func, worker int, isPgoHot bool) *ssa.Func {
 	if base.Flag.Cfg.Instrumenting && fn.Pragma&ir.Norace == 0 && !fn.Linksym().ABIWrapper() {
 		if !base.Flag.Race || !objabi.LookupPkgSpecial(fn.Sym().Pkg.Path).NoRaceFunc {
 			s.instrumentMemory = true
-		}
-		if base.Flag.Race {
-			s.instrumentEnterExit = true
+			if base.Flag.Race {
+				s.instrumentEnterExit = true
+			}
 		}
 	}
 
@@ -806,11 +805,8 @@ func (s *state) specializedMallocSym(size int64, hasPointers bool) *obj.LSym {
 	if !s.sizeSpecializedMallocEnabled() {
 		return nil
 	}
-	ptrSize := s.config.PtrSize
-	ptrBits := ptrSize * 8
-	minSizeForMallocHeader := ptrSize * ptrBits
-	heapBitsInSpan := size <= minSizeForMallocHeader
-	if !heapBitsInSpan {
+	const specializedMallocMax = 80 // This must match the constant in mkmalloc.
+	if size > specializedMallocMax {
 		return nil
 	}
 	divRoundUp := func(n, a uintptr) uintptr { return (n + a - 1) / a }
@@ -819,7 +815,7 @@ func (s *state) specializedMallocSym(size int64, hasPointers bool) *obj.LSym {
 		return ir.Syms.MallocGCSmallScanNoHeader[sizeClass]
 	}
 	if size < gc.TinySize {
-		return ir.Syms.MallocGCTiny[size]
+		return ir.Syms.MallocGCTiny
 	}
 	return ir.Syms.MallocGCSmallNoScan[sizeClass]
 }
@@ -1653,6 +1649,16 @@ func (s *state) stmtList(l ir.Nodes) {
 	}
 }
 
+func peelConvNop(n ir.Node) ir.Node {
+	if n == nil {
+		return n
+	}
+	for n.Op() == ir.OCONVNOP {
+		n = n.(*ir.ConvExpr).X
+	}
+	return n
+}
+
 // stmt converts the statement n to SSA and adds it to s.
 func (s *state) stmt(n ir.Node) {
 	s.pushLine(n.Pos())
@@ -1828,12 +1834,10 @@ func (s *state) stmt(n ir.Node) {
 		// arrays referenced are strictly smaller parts of the same base array.
 		// If one side of the assignment is a full array, then partial overlap
 		// can't happen. (The arrays are either disjoint or identical.)
-		mayOverlap := n.X.Op() == ir.ODEREF && (n.Y != nil && n.Y.Op() == ir.ODEREF)
-		if n.Y != nil && n.Y.Op() == ir.ODEREF {
-			p := n.Y.(*ir.StarExpr).X
-			for p.Op() == ir.OCONVNOP {
-				p = p.(*ir.ConvExpr).X
-			}
+		ny := peelConvNop(n.Y)
+		mayOverlap := n.X.Op() == ir.ODEREF && (n.Y != nil && ny.Op() == ir.ODEREF)
+		if ny != nil && ny.Op() == ir.ODEREF {
+			p := peelConvNop(ny.(*ir.StarExpr).X)
 			if p.Op() == ir.OSPTR && p.(*ir.UnaryExpr).X.Type().IsString() {
 				// Pointer fields of strings point to unmodifiable memory.
 				// That memory can't overlap with the memory being written.
@@ -3549,16 +3553,14 @@ func (s *state) exprCheckPtr(n ir.Node, checkPtrOK bool) *ssa.Value {
 				bound := n.X.Type().NumElem()
 				a := s.expr(n.X)
 				i := s.expr(n.Index)
-				if bound == 0 {
-					// Bounds check will never succeed.  Might as well
-					// use constants for the bounds check.
-					z := s.constInt(types.Types[types.TINT], 0)
-					s.boundsCheck(z, z, ssa.BoundsIndex, false)
-					// The return value won't be live, return junk.
-					// But not quite junk, in case bounds checks are turned off. See issue 48092.
-					return s.zeroVal(n.Type())
-				}
 				len := s.constInt(types.Types[types.TINT], bound)
+				if bound == 0 {
+					// Bounds check will never succeed.
+					s.boundsCheck(i, len, ssa.BoundsIndex, false)
+					// The return value won't be live. In case bounds checks
+					// are turned off, load from (*T)(nil) to cause a segfault.
+					return s.load(n.Type(), s.constNil(n.Type().PtrTo()))
+				}
 				s.boundsCheck(i, len, ssa.BoundsIndex, n.Bounded()) // checks i == 0
 				return s.newValue1I(ssa.OpArraySelect, n.Type(), 0, a)
 			}
@@ -4273,10 +4275,12 @@ func (s *state) minMax(n *ir.CallExpr) *ssa.Value {
 		if typ.IsFloat() {
 			hasIntrinsic := false
 			switch Arch.LinkArch.Family {
-			case sys.AMD64, sys.ARM64, sys.Loong64, sys.RISCV64, sys.S390X:
+			case sys.AMD64, sys.ARM64, sys.Loong64, sys.RISCV64:
 				hasIntrinsic = true
 			case sys.PPC64:
 				hasIntrinsic = buildcfg.GOPPC64 >= 9
+			case sys.S390X:
+				// FIXME: add check once GOS390X exists
 			}
 
 			if hasIntrinsic {
@@ -4488,6 +4492,11 @@ func (s *state) assignWhichMayOverlap(left ir.Node, right *ssa.Value, deref bool
 			// Grab old value of structure.
 			old := s.expr(left.X)
 
+			if left.Type().Size() == 0 {
+				// Nothing to do when assigning zero-sized things.
+				return
+			}
+
 			// Make new structure.
 			new := s.newValue0(ssa.OpStructMake, t)
 
@@ -4516,15 +4525,35 @@ func (s *state) assignWhichMayOverlap(left ir.Node, right *ssa.Value, deref bool
 
 			i := s.expr(left.Index) // index
 			if n == 0 {
+				_ = s.expr(left.X) // Evaluating left.X for any side-effects.
 				// The bounds check must fail.  Might as well
 				// ignore the actual index and just use zeros.
 				z := s.constInt(types.Types[types.TINT], 0)
 				s.boundsCheck(z, z, ssa.BoundsIndex, false)
 				return
 			}
-			if n != 1 {
-				s.Fatalf("assigning to non-1-length array")
+			if t.Size() == 0 {
+				_ = s.expr(left.X) // Evaluating left.X for any side-effects.
+				// Generate bounds check for left, since this can happen
+				// for 0-size assignment case, see issue #79236.
+				len := s.constInt(types.Types[types.TINT], n)
+				s.boundsCheck(i, len, ssa.BoundsIndex, false)
+				return
 			}
+			if n != 1 {
+				// This can happen in weird, always-panics cases, like:
+				//     var x [0][2]int
+				//     x[i][j] = 5
+				// We know it always panics because the LHS is ssa-able,
+				// and arrays of length > 1 can't be ssa-able unless
+				// they are somewhere inside an outer [0].
+				// We can ignore the actual assignment, it is dynamically
+				// unreachable. See issue 77635.
+				// Still, evaluating left.X for any side-effects.
+				_ = s.expr(left.X)
+				return
+			}
+
 			// Rewrite to a = [1]{v}
 			len := s.constInt(types.Types[types.TINT], 1)
 			s.boundsCheck(i, len, ssa.BoundsIndex, false) // checks i == 0
@@ -4570,6 +4599,9 @@ func (s *state) assignWhichMayOverlap(left ir.Node, right *ssa.Value, deref bool
 
 // zeroVal returns the zero value for type t.
 func (s *state) zeroVal(t *types.Type) *ssa.Value {
+	if t.Size() == 0 {
+		return s.entryNewValue0(ssa.OpEmpty, t)
+	}
 	switch {
 	case t.IsInteger():
 		switch t.Size() {
@@ -4622,13 +4654,8 @@ func (s *state) zeroVal(t *types.Type) *ssa.Value {
 			v.AddArg(s.zeroVal(t.FieldType(i)))
 		}
 		return v
-	case t.IsArray():
-		switch t.NumElem() {
-		case 0:
-			return s.entryNewValue0(ssa.OpArrayMake0, t)
-		case 1:
-			return s.entryNewValue1(ssa.OpArrayMake1, t, s.zeroVal(t.Elem()))
-		}
+	case t.IsArray() && t.NumElem() == 1:
+		return s.entryNewValue1(ssa.OpArrayMake1, t, s.zeroVal(t.Elem()))
 	case t.IsSIMD():
 		return s.newValue0(ssa.OpZeroSIMD, t)
 	}
@@ -4998,7 +5025,7 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 		fn := fn.(*ir.SelectorExpr)
 		var iclosure *ssa.Value
 		iclosure, rcvr = s.getClosureAndRcvr(fn)
-		if k == callNormal {
+		if k == callNormal || k == callTail {
 			codeptr = s.load(types.Types[types.TUINTPTR], iclosure)
 		} else {
 			closure = iclosure
@@ -5087,6 +5114,16 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 			callArgs = append(callArgs, s.putArg(n, t.Param(i).Type))
 		}
 
+		// In -race mode, we need to call racefuncexit before a tail call.
+		// A tail call reuses our frame and returns directly to our caller,
+		// so this is the last chance we get to tell the race detector that
+		// this function is done. Note: this has to happen after the
+		// arguments are evaluated, otherwise races in the argument
+		// expressions would be attributed to the caller instead.
+		if k == callTail && s.instrumentEnterExit {
+			s.rtcall(ir.Syms.Racefuncexit, true, nil)
+		}
+
 		callArgs = append(callArgs, s.mem())
 
 		// call target
@@ -5114,6 +5151,10 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 			// Note that the "receiver" parameter is nil because the actual receiver is the first input parameter.
 			aux := ssa.InterfaceAuxCall(params)
 			call = s.newValue1A(ssa.OpInterLECall, aux.LateExpansionResultType(), aux, codeptr)
+			if k == callTail {
+				call.Op = ssa.OpTailLECallInter
+				stksize = 0 // Tail call does not use stack. We reuse caller's frame.
+			}
 		case calleeLSym != nil:
 			aux := ssa.StaticAuxCall(calleeLSym, params)
 			call = s.newValue0A(ssa.OpStaticLECall, aux.LateExpansionResultType(), aux)
@@ -5142,6 +5183,22 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 		s.vars[memVar] = s.newValue1A(ssa.OpVarLive, types.TypeMem, v, s.mem())
 	}
 
+	// Build result value (before we might end the defer block, below).
+	var result *ssa.Value
+	if len(res) == 0 || k != callNormal {
+		result = nil
+	} else {
+		fp := res[0]
+		if returnResultAddr {
+			result = s.resultAddrOfCall(call, 0, fp.Type)
+		} else {
+			result = s.newValue1I(ssa.OpSelectN, fp.Type, 0, call)
+		}
+		if n.Reshape {
+			result = s.newValue1(ssa.OpCopy, n.Type(), result)
+		}
+	}
+
 	// Finish block for defers
 	if k == callDefer || k == callDeferStack || isCallDeferRangeFunc {
 		b := s.endBlock()
@@ -5161,15 +5218,7 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 		s.startBlock(bNext)
 	}
 
-	if len(res) == 0 || k != callNormal {
-		// call has no return value. Continue with the next statement.
-		return nil
-	}
-	fp := res[0]
-	if returnResultAddr {
-		return s.resultAddrOfCall(call, 0, fp.Type)
-	}
-	return s.newValue1I(ssa.OpSelectN, fp.Type, 0, call)
+	return result
 }
 
 // maybeNilCheckClosure checks if a nil check of a closure is needed in some
@@ -5215,7 +5264,16 @@ func (s *state) addr(n ir.Node) *ssa.Value {
 	}
 
 	if s.canSSA(n) {
-		s.Fatalf("addr of canSSA expression: %+v", n)
+		// This happens in weird, always-panics cases, like:
+		//     var x [0][2]int
+		//     x[i][j] = 5
+		// The outer assignment, ...[j] = 5, is a fine
+		// assignment to do, but requires computing the address
+		// &x[i], which will always panic when evaluated.
+		// We just return something reasonable in this case.
+		// It will be dynamically unreachable. See issue 77635.
+		s.boundsCheckArrayIndex(n)
+		return s.newValue1A(ssa.OpAddr, n.Type().PtrTo(), ir.Syms.Zerobase, s.sb)
 	}
 
 	t := types.NewPtr(n.Type())
@@ -5395,6 +5453,21 @@ func (s *state) nilCheck(ptr *ssa.Value) *ssa.Value {
 		return ptr
 	}
 	return s.newValue2(ssa.OpNilCheck, ptr.Type, ptr, s.mem())
+}
+
+// boundsCheckArrayIndex generates bounds checking code for array indexing operations.
+func (s *state) boundsCheckArrayIndex(n ir.Node) {
+	if n.Op() != ir.OINDEX {
+		return
+	}
+	nn := n.(*ir.IndexExpr)
+	typ := nn.X.Type()
+	if typ.IsArray() {
+		_ = s.expr(nn.X) // for side effects
+		idx := s.expr(nn.Index)
+		len := s.constInt(types.Types[types.TINT], typ.NumElem())
+		s.boundsCheck(idx, len, ssa.BoundsIndex, nn.Bounded())
+	}
 }
 
 // boundsCheck generates bounds checking code. Checks if 0 <= idx <[=] len, branches to exit if not.
@@ -5647,7 +5720,7 @@ func (s *state) storeTypeScalars(t *types.Type, left, right *ssa.Value, skip ski
 			val := s.newValue1I(ssa.OpStructSelect, ft, int64(i), right)
 			s.storeTypeScalars(ft, addr, val, 0)
 		}
-	case t.IsArray() && t.NumElem() == 0:
+	case t.IsArray() && t.Size() == 0:
 		// nothing
 	case t.IsArray() && t.NumElem() == 1:
 		s.storeTypeScalars(t.Elem(), left, s.newValue1I(ssa.OpArraySelect, t.Elem(), 0, right), 0)
@@ -5687,7 +5760,7 @@ func (s *state) storeTypePtrs(t *types.Type, left, right *ssa.Value) {
 			val := s.newValue1I(ssa.OpStructSelect, ft, int64(i), right)
 			s.storeTypePtrs(ft, addr, val)
 		}
-	case t.IsArray() && t.NumElem() == 0:
+	case t.IsArray() && t.Size() == 0:
 		// nothing
 	case t.IsArray() && t.NumElem() == 1:
 		s.storeTypePtrs(t.Elem(), left, s.newValue1I(ssa.OpArraySelect, t.Elem(), 0, right))
@@ -6781,6 +6854,7 @@ func emitArgInfo(e *ssafn, f *ssa.Func, pp *objw.Progs) {
 // emit argument info (locations on stack) of f for traceback.
 func EmitArgInfo(f *ir.Func, abiInfo *abi.ABIParamResultInfo) *obj.LSym {
 	x := base.Ctxt.Lookup(fmt.Sprintf("%s.arginfo%d", f.LSym.Name, f.ABI))
+	x.Align = 1
 	// NOTE: do not set ContentAddressable here. This may be referenced from
 	// assembly code by name (in this case f is a declaration).
 	// Instead, set it in emitArgInfo above.
@@ -6900,6 +6974,7 @@ func emitWrappedFuncInfo(e *ssafn, pp *objw.Progs) {
 	x := base.Ctxt.LookupInit(fmt.Sprintf("%s.wrapinfo", wsym.Name), func(x *obj.LSym) {
 		objw.SymPtrOff(x, 0, wsym)
 		x.Set(obj.AttrContentAddressable, true)
+		x.Align = 4
 	})
 	e.curfn.LSym.Func().WrapInfo = x
 

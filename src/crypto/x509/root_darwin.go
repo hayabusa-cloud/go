@@ -10,6 +10,9 @@ import (
 	"fmt"
 )
 
+// macOS has no default SSL_CERT_{FILE,DIR} paths.
+var certFiles, certDirectories []string
+
 func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate, err error) {
 	certs := macos.CFArrayCreateMutable()
 	defer macos.ReleaseCFArray(certs)
@@ -86,9 +89,14 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 		}
 		chain[0] = append(chain[0], cert)
 	}
+
 	if len(chain[0]) == 0 {
 		// This should _never_ happen, but to be safe
 		return nil, errors.New("x509: macos certificate verification internal error")
+	}
+
+	if containsDistrustedSPKIHash(chain[0]) {
+		return nil, CertificateInvalidError{c, NoValidChains, ""}
 	}
 
 	if opts.DNSName != "" {
@@ -124,8 +132,4 @@ func exportCertificate(cert macos.CFRef) (*Certificate, error) {
 		return nil, err
 	}
 	return ParseCertificate(data)
-}
-
-func loadSystemRoots() (*CertPool, error) {
-	return &CertPool{systemPool: true}, nil
 }

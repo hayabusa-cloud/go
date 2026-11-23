@@ -24,6 +24,16 @@ var (
 	ErrNilInterface    = errors.New("cannot derive concrete type for nil interface with finite type set")
 )
 
+// ValueError wraps the error with a Go value relevant to the error.
+// This is only used for v1 compatibility purposes.
+type ValueError struct {
+	Val any
+	Err error
+}
+
+func (ve *ValueError) Error() string { return ve.Err.Error() }
+func (ve *ValueError) Unwrap() error { return ve.Err }
+
 var (
 	// TransformMarshalError converts a v2 error into a v1 error.
 	// It is called only at the top-level of a Marshal function.
@@ -32,7 +42,7 @@ var (
 	// It is called after a user-defined Marshal method/function fails.
 	NewMarshalerError func(any, error, string) error
 	// TransformUnmarshalError converts a v2 error into a v1 error.
-	// It is called only at the top-level of a Unmarshal function.
+	// It is called only at the top-level of an Unmarshal function.
 	TransformUnmarshalError func(any, error) error
 
 	// NewRawNumber returns new(jsonv1.Number).

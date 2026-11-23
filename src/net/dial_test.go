@@ -526,7 +526,7 @@ func TestDialerLocalAddr(t *testing.T) {
 	type test struct {
 		network, raddr string
 		laddr          Addr
-		error
+		error          error
 	}
 	var tests = []test{
 		{"tcp4", "127.0.0.1", nil, nil},
@@ -1159,6 +1159,31 @@ func TestDialContext(t *testing.T) {
 			c2.Close()
 		}
 	})
+}
+
+func TestDialNetipInvalidRaddr(t *testing.T) {
+	assertErrMissingAddress := func(t *testing.T, name string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Errorf("%s err = nil", name)
+			return
+		}
+		e, ok := err.(*OpError)
+		if !ok {
+			t.Errorf("%s err = %#v, want *OpError", name, err)
+			return
+		}
+		if e.Err != errMissingAddress {
+			t.Errorf("%s err = %#v, want *OpError errMissingAddress", name, err)
+		}
+	}
+	var d Dialer
+	_, err := d.DialTCP(t.Context(), "tcp", netip.AddrPort{}, netip.AddrPort{})
+	assertErrMissingAddress(t, "DialTCP()", err)
+	_, err = d.DialUDP(t.Context(), "udp", netip.AddrPort{}, netip.AddrPort{})
+	assertErrMissingAddress(t, "DialUDP()", err)
+	_, err = d.DialIP(t.Context(), "ip6:ipv6-icmp", netip.Addr{}, netip.Addr{})
+	assertErrMissingAddress(t, "DialIP()", err)
 }
 
 // mustHaveExternalNetwork is like testenv.MustHaveExternalNetwork

@@ -160,10 +160,13 @@ type Dialer struct {
 	DualStack bool
 
 	// FallbackDelay specifies the length of time to wait before
-	// spawning a RFC 6555 Fast Fallback connection. That is, this
-	// is the amount of time to wait for IPv6 to succeed before
-	// assuming that IPv6 is misconfigured and falling back to
-	// IPv4.
+	// spawning a RFC 6555 Fast Fallback connection.
+	//
+	// When dialing "tcp" and both IPv6 and IPv4 addresses are
+	// available, the address family of the first resolved address
+	// is treated as the primary. After FallbackDelay, a connection
+	// attempt to the other address family is started if the primary
+	// connection has not yet succeeded.
 	//
 	// If zero, a default delay of 300ms is used.
 	// A negative value disables Fast Fallback support.
@@ -572,7 +575,8 @@ func (d *Dialer) dialCtx(ctx context.Context) (context.Context, context.CancelFu
 		}
 	}
 	if oldCancel := d.Cancel; oldCancel != nil {
-		subCtx, cancel2 := context.WithCancel(ctx)
+		var subCtx context.Context
+		subCtx, cancel2 = context.WithCancel(ctx)
 		go func() {
 			select {
 			case <-oldCancel:
@@ -603,7 +607,14 @@ func (d *Dialer) dialCtx(ctx context.Context) (context.Context, context.CancelFu
 func (d *Dialer) DialTCP(ctx context.Context, network string, laddr netip.AddrPort, raddr netip.AddrPort) (*TCPConn, error) {
 	ctx, cancel := d.dialCtx(ctx)
 	defer cancel()
-	return dialTCP(ctx, d, network, TCPAddrFromAddrPort(laddr), TCPAddrFromAddrPort(raddr))
+	var laddrTCP, raddrTCP *TCPAddr
+	if laddr.IsValid() {
+		laddrTCP = TCPAddrFromAddrPort(laddr)
+	}
+	if raddr.IsValid() {
+		raddrTCP = TCPAddrFromAddrPort(raddr)
+	}
+	return dialTCP(ctx, d, network, laddrTCP, raddrTCP)
 }
 
 // DialUDP acts like Dial for UDP networks using the provided context.
@@ -617,7 +628,14 @@ func (d *Dialer) DialTCP(ctx context.Context, network string, laddr netip.AddrPo
 func (d *Dialer) DialUDP(ctx context.Context, network string, laddr netip.AddrPort, raddr netip.AddrPort) (*UDPConn, error) {
 	ctx, cancel := d.dialCtx(ctx)
 	defer cancel()
-	return dialUDP(ctx, d, network, UDPAddrFromAddrPort(laddr), UDPAddrFromAddrPort(raddr))
+	var laddrUDP, raddrUDP *UDPAddr
+	if laddr.IsValid() {
+		laddrUDP = UDPAddrFromAddrPort(laddr)
+	}
+	if raddr.IsValid() {
+		raddrUDP = UDPAddrFromAddrPort(raddr)
+	}
+	return dialUDP(ctx, d, network, laddrUDP, raddrUDP)
 }
 
 // DialIP acts like Dial for IP networks using the provided context.
@@ -631,7 +649,14 @@ func (d *Dialer) DialUDP(ctx context.Context, network string, laddr netip.AddrPo
 func (d *Dialer) DialIP(ctx context.Context, network string, laddr netip.Addr, raddr netip.Addr) (*IPConn, error) {
 	ctx, cancel := d.dialCtx(ctx)
 	defer cancel()
-	return dialIP(ctx, d, network, ipAddrFromAddr(laddr), ipAddrFromAddr(raddr))
+	var laddrIP, raddrIP *IPAddr
+	if laddr.IsValid() {
+		laddrIP = ipAddrFromAddr(laddr)
+	}
+	if raddr.IsValid() {
+		raddrIP = ipAddrFromAddr(raddr)
+	}
+	return dialIP(ctx, d, network, laddrIP, raddrIP)
 }
 
 // DialUnix acts like Dial for Unix networks using the provided context.
@@ -662,7 +687,7 @@ func (sd *sysDialer) dialParallel(ctx context.Context, primaries, fallbacks addr
 
 	type dialResult struct {
 		Conn
-		error
+		error   error
 		primary bool
 		done    bool
 	}

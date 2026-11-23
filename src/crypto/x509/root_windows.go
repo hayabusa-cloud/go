@@ -7,14 +7,14 @@ package x509
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"syscall"
 	"unsafe"
 )
 
-func loadSystemRoots() (*CertPool, error) {
-	return &CertPool{systemPool: true}, nil
-}
+// Windows has no default SSL_CERT_{FILE,DIR} paths.
+var certFiles, certDirectories []string
 
 // Creates a new *syscall.CertContext representing the leaf certificate in an in-memory
 // certificate store containing itself and all of the intermediate certificates specified
@@ -268,7 +268,12 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 		}
 	}
 
+	chains = slices.DeleteFunc(chains, containsDistrustedSPKIHash)
+
 	if len(chains) == 0 {
+		if topErr == nil {
+			return nil, CertificateInvalidError{c, NoValidChains, ""}
+		}
 		// Return the error from the highest quality context.
 		return nil, topErr
 	}
