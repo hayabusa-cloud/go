@@ -32,7 +32,6 @@ func testDWARF(t *testing.T, buildmode string, expectDWARF bool, env ...string) 
 	t.Parallel()
 
 	for _, prog := range []string{"testprog", "testprogcgo"} {
-		prog := prog
 		expectDWARF := expectDWARF
 		if runtime.GOOS == "aix" && prog == "testprogcgo" {
 			extld := os.Getenv("CC")
@@ -426,7 +425,7 @@ func TestFlagW(t *testing.T) {
 		{"-s", false},     // -s implies -w
 		{"-s -w=0", true}, // -w=0 negates the implied -w
 	}
-	if testenv.HasCGO() && runtime.GOOS != "solaris" { // Solaris linker doesn't support the -S flag
+	if testenv.HasCGO() && runtime.GOOS != "solaris" && runtime.GOOS != "illumos" { // Solaris linker doesn't support the -S flag
 		tests = append(tests,
 			testCase{"-w -linkmode=external", false},
 			testCase{"-s -linkmode=external", false},

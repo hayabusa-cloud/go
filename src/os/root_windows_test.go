@@ -11,12 +11,53 @@ import (
 	"fmt"
 	"internal/strconv"
 	"internal/syscall/windows"
+	"internal/testenv"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"unsafe"
 )
+
+func init() {
+	createJunction = func(t *testing.T, link, target string) {
+		if !filepath.IsAbs(target) {
+			target = filepath.Dir(link) + `\` + target
+		}
+		target, err := syscall.FullPath(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rd reparseData
+		rd.addSubstituteName(`\??\` + target)
+		rd.addPrintName(target)
+		if err := createMountPoint(link, &rd); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRootOpenatFallback(t *testing.T) {
+	windows.TestOpenatFallback = true
+	t.Cleanup(func() { windows.TestOpenatFallback = false })
+
+	// Exercise the existing path traversal and symlink confinement cases
+	// with OBJ_DONT_REPARSE unavailable, as on Windows 10 build 10240.
+	t.Run("OpenFile", TestRootOpen_File)
+	t.Run("OpenDirectory", TestRootOpen_Directory)
+	t.Run("Create", TestRootCreate)
+	t.Run("Stat", TestRootStat)
+	t.Run("Lstat", TestRootLstat)
+	t.Run("RemoveAll", TestRootRemoveAll)
+	t.Run("RemoveAllNoRoot", TestRemoveAll)
+	t.Run("DeleteOnClose", testRootOpenFileDeleteOnClose)
+	t.Run("LegacyDelete", func(t *testing.T) {
+		windows.TestDeleteatFallback = true
+		t.Cleanup(func() { windows.TestDeleteatFallback = false })
+		t.Run("RemoveAll", TestRootRemoveAll)
+		t.Run("RemoveAllNoRoot", TestRemoveAll)
+	})
+}
 
 // Verify that Root.Open rejects Windows reserved names.
 func TestRootWindowsDeviceNames(t *testing.T) {
@@ -60,6 +101,8 @@ func TestRootWindowsCaseInsensitivity(t *testing.T) {
 // TestRootSymlinkRelativity tests that symlinks created using Root.Symlink have the
 // same SYMLINK_FLAG_RELATIVE value as ones creates using os.Symlink.
 func TestRootSymlinkRelativity(t *testing.T) {
+	testenv.MustHaveSymlink(t)
+
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -161,6 +204,8 @@ func readSymlinkReparseData(name string) (*windows.SymbolicLinkReparseBuffer, er
 // TestRootSymlinkToDirectory tests that Root.Symlink creates directory links
 // when the target is a directory contained within the root.
 func TestRootSymlinkToDirectory(t *testing.T) {
+	testenv.MustHaveSymlink(t)
+
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -227,6 +272,31 @@ func TestRootSymlinkToDirectory(t *testing.T) {
 				t.Errorf("link target %q: isDir = %v, want %v", test.target, got, want)
 			}
 		})
+	}
+}
+
+func TestRootSymlinkNormalization(t *testing.T) {
+	if !testenv.HasSymlink() {
+		t.Skip("skipping test; no symlink support")
+	}
+	const content = "dir/target" // same as file name
+	dir := makefs(t, []string{
+		"dir/target",
+	})
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := root.Symlink("dir/target", "link"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dir + "/link")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Fatalf("read link contents %q, want %q", got, content)
 	}
 }
 
@@ -297,6 +367,10 @@ func TestRootOpenFileFlags(t *testing.T) {
 
 func TestRootOpenFileDeleteOnClose(t *testing.T) {
 	t.Parallel()
+	testRootOpenFileDeleteOnClose(t)
+}
+
+func testRootOpenFileDeleteOnClose(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {

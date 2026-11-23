@@ -2087,6 +2087,12 @@ func testReverseProxyQueryParameterSmuggling(t *testing.T, wantCleanQuery bool, 
 	}, {
 		rawQuery:   "a=1&a=%zz&b=3",
 		cleanQuery: "a=1&b=3",
+	}, {
+		rawQuery:   "a=%zz",
+		cleanQuery: "",
+	}, {
+		rawQuery:   strings.Repeat("a=1&", 10000) + "a=1",
+		cleanQuery: "",
 	}} {
 		res, err := frontend.Client().Get(frontend.URL + "?" + test.rawQuery)
 		if err != nil {
@@ -2149,44 +2155,6 @@ func TestReverseProxyHijackCopyError(t *testing.T) {
 	proxyHandler.ServeHTTP(rw, req)
 }
 
-// https://go.dev/issue/75933.
-func TestReverseProxyInvalidUpstream100ContinueDoNotHang(t *testing.T) {
-	proxy := ReverseProxy{
-		Transport: &http.Transport{DisableKeepAlives: true, ExpectContinueTimeout: time.Second * 60},
-		Director: func(request *http.Request) {
-			request.URL.Scheme = "http"
-			request.URL.Host = "doesnotexist:12345" // non-existent upstream
-		},
-	}
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxy.ServeHTTP(w, r)
-	})
-	upstreamServer := httptest.NewServer(handler)
-	defer upstreamServer.Close()
-
-	conn, err := net.Dial("tcp", upstreamServer.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	requestBody := `{"test": "data"}`
-	initialRequest := fmt.Sprintf("POST %s/test-expect HTTP/1.1\r\n"+
-		"Host: %s\r\n"+
-		"Content-Type: application/json\r\n"+
-		"Content-Length: %d\r\n"+
-		"Expect: 100-continue\r\n"+
-		"\r\n", upstreamServer.URL, upstreamServer.Listener.Addr().String(), len(requestBody))
-
-	if _, err := conn.Write([]byte(initialRequest)); err != nil {
-		log.Fatal(err)
-	}
-	buff := make([]byte, 1024)
-	if _, err := conn.Read(buff); err != nil {
-		log.Fatal(err)
-	}
-}
-
 type testResponseWriter struct {
 	h           http.Header
 	writeHeader func(int)
@@ -2246,4 +2214,26 @@ func (rc *testReadWriteCloser) Close() error {
 		return rc.close()
 	}
 	return nil
+}
+
+func TestReverseProxyCONNECT(t *testing.T) {
+	proxy := &ReverseProxy{
+		Rewrite: func(r *ProxyRequest) {
+			backendURL, _ := url.Parse("http://backend.tld/")
+			r.SetURL(backendURL)
+		},
+	}
+	frontend := httptest.NewServer(proxy)
+	defer frontend.Close()
+
+	req, _ := http.NewRequest("CONNECT", frontend.URL, strings.NewReader("body"))
+	resp, err := frontend.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if got, want := resp.StatusCode, http.StatusMethodNotAllowed; got != want {
+		t.Errorf("on response to CONNECT: got status %v, want %v", got, want)
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"internal/godebug"
 	"io"
 	"log"
 	"mime"
@@ -21,7 +22,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http/httpguts"
@@ -436,18 +436,6 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		outreq.Body = nil // Issue 16036: nil Body for http.Transport retries
 	}
 	if outreq.Body != nil {
-		// Wrap the body in a reader where Close does nothing. This is done
-		// because p.Transport.RoundTrip would close the reverse proxy's
-		// outbound request body if it fails to connect to upstream. If we do
-		// not wrap the body, when we close the reverse proxy's outbound
-		// request, it will also close the reverse proxy's inbound request body
-		// (i.e. the client's outbound request body). This is because
-		// http.(*Request).Clone creates a shallow copy of the body. This can
-		// cause an infinite hang in cases where the body is not yet received
-		// from the client (e.g. 100-continue requests): Close, which
-		// internally tries to consume the body content, would be called too
-		// early and would hang.
-		outreq.Body = &noopCloseReader{readCloser: outreq.Body}
 		// Reading from the request body after returning from a handler is not
 		// allowed, and the RoundTrip goroutine that reads the Body can outlive
 		// this handler. This can lead to a crash if the handler panics (see
@@ -528,6 +516,21 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 				outreq.Header.Set("X-Forwarded-For", clientIP)
 			}
 		}
+	}
+
+	if outreq.Method == "CONNECT" {
+		// We cannot handle CONNECT requests.
+		// (Perhaps we should just send a 405 and never call ErrorHandler?
+		// More consistent to always call ErrorHandler or ModifyResponse,
+		// so we do that for now.)
+		err := errors.New("client sent unsupported CONNECT request")
+		if p.ErrorHandler != nil {
+			p.ErrorHandler(rw, outreq, err)
+		} else {
+			p.logf("http: proxy error: %v", err)
+			rw.WriteHeader(http.StatusMethodNotAllowed)
+		}
+		return
 	}
 
 	if _, ok := outreq.Header["User-Agent"]; !ok {
@@ -922,10 +925,23 @@ func (c switchProtocolCopier) copyToBackend(errc chan<- error) {
 	errc <- errCopyDone
 }
 
+var urlmaxqueryparams = godebug.New("urlmaxqueryparams")
+
+// Keep this in sync with net/url.
+const defaultMaxParams = 10000
+
 func cleanQueryParams(s string) string {
 	reencode := func(s string) string {
 		v, _ := url.ParseQuery(s)
 		return v.Encode()
+	}
+	if urlmaxqueryparams.Value() != "" {
+		// Always reencode when a non-default urlmaxqueryparams is set.
+		return reencode(s)
+	}
+	if numParams := strings.Count(s, "&") + 1; numParams > defaultMaxParams {
+		// Too many query parameters.
+		return reencode(s)
 	}
 	for i := 0; i < len(s); {
 		switch s[i] {
@@ -953,21 +969,4 @@ func ishex(c byte) bool {
 		return true
 	}
 	return false
-}
-
-type noopCloseReader struct {
-	readCloser io.ReadCloser
-	closed     atomic.Bool
-}
-
-func (ncr *noopCloseReader) Close() error {
-	ncr.closed.Store(true)
-	return nil
-}
-
-func (ncr *noopCloseReader) Read(p []byte) (int, error) {
-	if ncr.closed.Load() {
-		return 0, errors.New("ReverseProxy does an invalid Read on closed Body")
-	}
-	return ncr.readCloser.Read(p)
 }

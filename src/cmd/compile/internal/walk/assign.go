@@ -120,6 +120,16 @@ func walkAssign(init *ir.Nodes, n ir.Node) ir.Node {
 // walkAssignDotType walks an OAS2DOTTYPE node.
 func walkAssignDotType(n *ir.AssignListStmt, init *ir.Nodes) ir.Node {
 	walkExprListSafe(n.Lhs, init)
+
+	if r, ok := n.Rhs[0].(*ir.TypeAssertExpr); ok && r.Op() == ir.ODOTTYPE2 && !r.Type().IsInterface() {
+		if shapeTypeAssertImpossible(r.X, r.Type()) {
+			init.Append(typecheck.Stmt(ir.NewAssignStmt(base.Pos, ir.BlankNode, walkExpr(r.X, init))))
+			init.Append(typecheck.Stmt(ir.NewAssignStmt(base.Pos, n.Lhs[0], ir.NewZero(base.Pos, r.Type()))))
+			init.Append(typecheck.Stmt(ir.NewAssignStmt(base.Pos, n.Lhs[1], ir.NewBool(base.Pos, false))))
+			return ir.NewBlockStmt(base.Pos, nil)
+		}
+	}
+
 	n.Rhs[0] = walkExpr(n.Rhs[0], init)
 	return n
 }
@@ -157,11 +167,9 @@ func walkAssignMapRead(init *ir.Nodes, n *ir.AssignListStmt) ir.Node {
 
 	r.X = walkExpr(r.X, init)
 	r.Index = walkExpr(r.Index, init)
-	map_ := r.X
 	t := r.X.Type()
 	fast := mapfast(t)
 	key := mapKeyArg(fast, r, r.Index, false)
-	args := []ir.Node{reflectdata.IndexMapRType(base.Pos, r), map_, key}
 
 	// from:
 	//   a,b = m[i]
@@ -170,14 +178,15 @@ func walkAssignMapRead(init *ir.Nodes, n *ir.AssignListStmt) ir.Node {
 	//   a = *var
 	a := n.Lhs[0]
 
-	var mapFn ir.Node
-	if t.Elem().Size() > abi.ZeroValSize {
-		args = append(args, reflectdata.ZeroAddr(t.Elem().Size()))
-		mapFn = mapfn("mapaccess2_fat", t, true)
+	var call *ir.CallExpr
+	if w := t.Elem().Size(); w <= abi.ZeroValSize {
+		fn := mapfn(mapaccess2[fast], t, false)
+		call = mkcall1(fn, fn.Type().ResultsTuple(), init, reflectdata.IndexMapRType(base.Pos, r), r.X, key)
 	} else {
-		mapFn = mapfn(mapaccess[fast], t, false)
+		fn := mapfn("mapaccess2_fat", t, true)
+		z := reflectdata.ZeroAddr(w)
+		call = mkcall1(fn, fn.Type().ResultsTuple(), init, reflectdata.IndexMapRType(base.Pos, r), r.X, key, z)
 	}
-	call := mkcall1(mapFn, mapFn.Type().ResultsTuple(), init, args...)
 
 	// mapaccess2* returns a typed bool, but due to spec changes,
 	// the boolean result of i.(T) is now untyped so we make it the
@@ -220,7 +229,7 @@ func walkAssignRecv(init *ir.Nodes, n *ir.AssignListStmt) ir.Node {
 	fn := chanfn("chanrecv2", 2, r.X.Type())
 	ok := n.Lhs[1]
 	call := mkcall1(fn, types.Types[types.TBOOL], init, r.X, n1)
-	return typecheck.Stmt(ir.NewAssignStmt(base.Pos, ok, call))
+	return walkAssign(init, typecheck.Stmt(ir.NewAssignStmt(base.Pos, ok, call)))
 }
 
 // walkReturn walks an ORETURN node.

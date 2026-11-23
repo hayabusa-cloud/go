@@ -344,6 +344,31 @@ func TestReadMIMEHeaderAllocations(t *testing.T) {
 	}
 }
 
+type testReader struct {
+	read func([]byte) (int, error)
+}
+
+func (r testReader) Read(p []byte) (n int, err error) { return r.read(p) }
+
+func TestReadMIMEHeaderShortLimitLongLine(t *testing.T) {
+	// Small limit, long first line.
+	r := NewReader(bufio.NewReader(
+		io.MultiReader(
+			strings.NewReader("K:"),
+			testReader{
+				read: func(p []byte) (n int, err error) {
+					for i := range p {
+						p[i] = ' '
+					}
+					return len(p), nil
+				},
+			})))
+	_, err := readMIMEHeader(r, 1, 1)
+	if err != errMessageTooLarge {
+		t.Fatalf("readMIMEHeader = %v, want errMessageTooLarge", err)
+	}
+}
+
 type readResponseTest struct {
 	in       string
 	inCode   int
@@ -411,6 +436,8 @@ func TestReadMultiLineError(t *testing.T) {
 		"Unexpected but legal text!\n" +
 		"5.1.1 https://support.google.com/mail/answer/6596 h20si25154304pfd.166 - gsmtp"
 
+	wantError := `550 "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. Learn more at\nUnexpected but legal text!\n5.1.1 https://support.google.com/mail/answer/6596 h20si25154304pfd.166 - gsmtp"`
+
 	code, msg, err := r.ReadResponse(250)
 	if err == nil {
 		t.Errorf("ReadResponse: no error, want error")
@@ -421,8 +448,8 @@ func TestReadMultiLineError(t *testing.T) {
 	if msg != wantMsg {
 		t.Errorf("ReadResponse: msg=%q, want %q", msg, wantMsg)
 	}
-	if err != nil && err.Error() != "550 "+wantMsg {
-		t.Errorf("ReadResponse: error=%q, want %q", err.Error(), "550 "+wantMsg)
+	if err != nil && err.Error() != wantError {
+		t.Errorf("ReadResponse: error=%q, want %q", err.Error(), wantError)
 	}
 }
 

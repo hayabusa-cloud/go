@@ -22,7 +22,7 @@ func TestUndefinedRelocErrors(t *testing.T) {
 	// When external linking, symbols may be defined externally, so we allow
 	// undefined symbols and let external linker resolve. Skip the test.
 	//
-	// N.B. go build below explictly doesn't pass through
+	// N.B. go build below explicitly doesn't pass through
 	// -asan/-msan/-race, so we don't care about those.
 	testenv.MustInternalLink(t, testenv.NoSpecialBuildTypes)
 
@@ -199,6 +199,49 @@ func TestWindowsBuildmodeCSharedASLR(t *testing.T) {
 	})
 }
 
+func TestWindowsBuildmodeCSharedTrailingDotOutput(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("skipping windows only test")
+	}
+
+	t.Parallel()
+	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
+	testenv.MustHaveBuildMode(t, "c-shared")
+
+	dir := t.TempDir()
+	srcfile := filepath.Join(dir, "test.go")
+	objfile := filepath.Join(dir, "mypackage.")
+	linktmp := filepath.Join(dir, "linktmp")
+	if err := os.Mkdir(linktmp, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srcfile, []byte(`package main
+import "C"
+
+//export Hello
+func Hello() {}
+
+func main() {}
+`), 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	argv := []string{"build", "-buildmode=c-shared", "-o", objfile, "-ldflags", "-tmpdir=" + linktmp, srcfile}
+	out, err := testenv.Command(t, testenv.GoToolPath(t), argv...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("build failure: %s\n%s\n", err, string(out))
+	}
+
+	def, err := os.ReadFile(filepath.Join(linktmp, "export_file.def"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte("LIBRARY \"mypackage.\"\n"); !bytes.HasPrefix(def, want) {
+		t.Fatalf("export_file.def begins with %q, want %q", def, want)
+	}
+}
+
 func testWindowsBuildmodeCSharedASLR(t *testing.T, useASLR bool) {
 	t.Parallel()
 	testenv.MustHaveGoBuild(t)
@@ -354,7 +397,6 @@ func main() {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			tempDir := t.TempDir()

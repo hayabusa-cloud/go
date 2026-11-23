@@ -878,7 +878,7 @@ func addbuildinfo(ctxt *Link) {
 		}
 
 		if ctxt.IsDarwin() {
-			buildinfo = uuidFromGoBuildId(buildID)
+			buildinfo = uuidFromHash(hash.Sum32([]byte(buildID)))
 			return
 		}
 
@@ -1540,10 +1540,6 @@ func (ctxt *Link) doelf() {
 			dynamic.SetType(sym.SELFSECT)
 		}
 
-		if ctxt.IsS390X() {
-			// S390X uses .got instead of .got.plt
-			gotplt = got
-		}
 		thearch.ELF.SetupPLT(ctxt, ctxt.loader, plt, gotplt, dynamic.Sym())
 
 		// .dynamic table

@@ -227,7 +227,8 @@
 (Leq64U x y) => (XOR (MOVVconst [1]) (SGTU x y))
 
 (OffPtr [off] ptr:(SP)) && is32Bit(off) => (MOVVaddr [int32(off)] ptr)
-(OffPtr [off] ptr) => (ADDVconst [off] ptr)
+(OffPtr [off] ptr) &&  is32Bit(off) => (ADDVconst [off] ptr)
+(OffPtr [off] ptr) && !is32Bit(off) => (ADDV ptr (MOVVconst <typ.UInt64> [off]))
 
 (Addr {sym} base) => (MOVVaddr {sym} base)
 (LocalAddr <t> {sym} base mem) && t.Elem().HasPointers() => (MOVVaddr {sym} (SPanchored base mem))
@@ -405,6 +406,7 @@
 (ClosureCall ...) => (CALLclosure ...)
 (InterCall ...) => (CALLinter ...)
 (TailCall ...) => (CALLtail ...)
+(TailCallInter ...) => (CALLtailinter ...)
 
 // atomic intrinsics
 (AtomicLoad(8|32|64) ...) => (LoweredAtomicLoad(8|32|64) ...)
@@ -690,6 +692,9 @@
 (Select1 (DIVVU x (MOVVconst [c]))) && isPowerOfTwo(c) => (SRLVconst [log64(c)] x)
 (Select0 (DIVVU _ (MOVVconst [1]))) => (MOVVconst [0])                       // mod
 (Select0 (DIVVU x (MOVVconst [c]))) && isPowerOfTwo(c) => (ANDconst [c-1] x) // mod
+
+// Absorb conversion between 32 bit and 64 bit if both src and dst are 32 bit.
+(MOVDF ((ABS|SQRT)D (MOVFD x))) => ((ABS|SQRT)F x)
 
 // generic simplifications
 (ADDV x (NEGV y)) => (SUBV x y)

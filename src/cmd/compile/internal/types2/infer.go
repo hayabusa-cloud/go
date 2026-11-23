@@ -111,7 +111,7 @@ func (check *Checker) infer(pos syntax.Pos, tparams []*TypeParam, targs []Type, 
 	// Unify parameter and argument types for generic parameters with typed arguments
 	// and collect the indices of generic parameters with untyped arguments.
 	// Terminology: generic parameter = function parameter with a type-parameterized type
-	u := newUnifier(tparams, targs, check.allowVersion(go1_21))
+	u := newUnifier(check, tparams, targs, check.allowVersion(go1_21))
 
 	errorf := func(tpar, targ Type, arg *operand) {
 		// provide a better error message if we can
@@ -431,7 +431,7 @@ func (check *Checker) infer(pos syntax.Pos, tparams []*TypeParam, targs []Type, 
 				// TODO(gri) Consider doing this in Checker.subst.
 				//           Then this would fall out automatically here and also
 				//           in instantiation (where we also explicitly nil out
-				//           type parameters). See the *Signature TODO in subst.
+				//           type parameters).
 				if sig, _ := t1.(*Signature); sig != nil && sig.TypeParams().Len() > 0 && !isParameterized(tparams, sig) {
 					sig.tparams = nil
 				}

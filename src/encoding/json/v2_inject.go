@@ -7,6 +7,7 @@
 package json
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -44,14 +45,16 @@ func transformMarshalError(root any, err error) error {
 		} else {
 			// Historically, this was only reported for NaN or ±Inf values
 			// and cycles detected in the value.
-			// The Val used to be populated with the reflect.Value,
-			// but this is no longer supported.
+			var v reflect.Value
+			if err, ok := errors.AsType[*internal.ValueError](err.Err); ok {
+				v = reflect.ValueOf(err.Val)
+			}
 			errStr := err.Err.Error()
 			if err.Err == internal.ErrCycle && err.GoType != nil {
 				errStr += " via " + err.GoType.String()
 			}
 			errStr = strings.TrimPrefix(errStr, "unsupported value: ")
-			return &UnsupportedValueError{Str: errStr}
+			return &UnsupportedValueError{Value: v, Str: errStr}
 		}
 	} else if ok {
 		return (*UnsupportedValueError)(nil)
@@ -92,7 +95,7 @@ func transformUnmarshalError(root any, err error) error {
 		// Users that care about precise positions should use v2 errors
 		// by disabling [ReportErrorsWithLegacySemantics].
 		//
-		// The introduction of a Err field is new to the v1-to-v2 migration
+		// The introduction of an Err field is new to the v1-to-v2 migration
 		// and allows us to preserve stronger error information
 		// that may be surfaced by the v2 package.
 		//

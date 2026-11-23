@@ -217,13 +217,13 @@ func nilcheckelim2(f *Func) {
 					f.Warnl(v.Pos, "removed nil check")
 				}
 				// For bug 33724, policy is that we might choose to bump an existing position
-				// off the faulting load in favor of the one from the nil check.
+				// off the faulting load/store in favor of the one from the nil check.
 
 				// Iteration order means that first nilcheck in the chain wins, others
 				// are bumped into the ordinary statement preservation algorithm.
 				uid, _ := unnecessary.get(v.Args[0].ID)
 				u := b.Values[uid]
-				if !u.Type.IsMemory() && !u.Pos.SameFileAndLine(v.Pos) {
+				if !u.Pos.SameFileAndLine(v.Pos) {
 					if u.Pos.IsStmt() == src.PosIsStmt {
 						pendingLines.add(u.Pos)
 					}
@@ -302,7 +302,7 @@ func nilcheckelim2(f *Func) {
 				case auxInt64:
 					// ARM uses this auxType for duffcopy/duffzero/alignment info.
 					// It does not affect the effective address.
-				case auxNone:
+				case auxNone, auxSizeAndAlign:
 					// offset is zero.
 				default:
 					v.Fatalf("can't handle aux %s (type %d) yet\n", v.auxString(), int(opcodeTable[v.Op].auxType))
