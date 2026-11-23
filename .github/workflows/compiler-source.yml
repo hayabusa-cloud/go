@@ -1,0 +1,42 @@
+name: Check Atomix compiler source
+
+on:
+  pull_request:
+    branches: [atomix]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compiler-source-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+
+jobs:
+  compiler-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read bootstrap version
+        id: bootstrap
+        run: |
+          version=$(jq -er .bootstrap .github/release/recipe.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.bootstrap.outputs.version }}
+          check-latest: true
+          cache: false
+      - name: Compare compiler sources with the release recipe
+        run: |
+          out="$RUNNER_TEMP/compiler-source"
+          go -C .github/release run . prepare -version "$(cat .github/upstream-version)" -out "$out"
+          tree=$(jq -er .tree "$out/candidate.json")
+          git diff --exit-code --name-status "$tree" HEAD -- src/cmd/compile

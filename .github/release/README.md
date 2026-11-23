@@ -1,6 +1,8 @@
 # Atomix Go releases
 
-Daily CI selects the latest stable patch of the two newest Go release lines and of Go 1.27. When Go 1.29 is stable, for example, the targets are 1.29.x, 1.28.x and 1.27.x. Each version appears once in the release plan.
+Both `atomix` and `lfq` target Go 1.27.x. Daily CI selects the latest stable patch of that line and of the two newest upstream Go release lines. When Go 1.29 is stable, for example, the targets are 1.29.x, 1.28.x and 1.27.x. Each version appears once in the release plan.
+
+Refresh the `atomix` development branch in a pull request when adopting a new Go line or an upstream fix. Set `.github/upstream-version` to the upstream tag in that change. Every pull request to `atomix` regenerates SSA with the release recipe and compares the entire `src/cmd/compile` tree with the proposed merge, even for a published release.
 
 `recipe.json` pins the patch base and selects the latest stock Go 1.27.x as the direct bootstrap. The planner checks the bootstrap version against the Go archive and passes it to every job. Revisit the bootstrap when an upstream target requires a newer compiler. [Go bootstrap requirements](https://go.dev/doc/install/source#go14)
 
